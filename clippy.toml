@@ -1,0 +1,3 @@
+# Words the docs use as names, not code (clippy::doc_markdown). ".." keeps
+# clippy's defaults.
+doc-valid-idents = ["ETag", "OpenAPI", "AdSense", "snake_case", ".."]

@@ -1,0 +1,29 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Fail if Cargo.toml's [dependencies] names a crate that CONTRIBUTING.md does
+# not justify under "Runtime dependencies" (a line starting "- `<crate>`:").
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+
+deps=$(awk '
+  /^\[/ { section = $0; next }
+  section == "[dependencies]" && /^[A-Za-z0-9_-]+[[:space:]]*=/ { sub(/[[:space:]]*=.*/, ""); print }
+' Cargo.toml)
+
+justified=$(awk '
+  /^### Runtime dependencies/ { on = 1; next }
+  /^##/ { on = 0 }
+  on && /^- `/ { sub(/^- `/, ""); sub(/`.*/, ""); print }
+' CONTRIBUTING.md)
+
+status=0
+for dep in $deps; do
+	if ! printf '%s\n' "$justified" | grep -qx -- "$dep"; then
+		echo "check-deps: $dep is in [dependencies] but has no justification line in CONTRIBUTING.md" >&2
+		status=1
+	fi
+done
+[ $status -eq 0 ] && echo "check-deps: every runtime dependency is justified in CONTRIBUTING.md"
+exit $status

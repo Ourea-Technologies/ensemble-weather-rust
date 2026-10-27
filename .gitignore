@@ -1,0 +1,4 @@
+# Private scratch space for local work (never committed).
+/.scratch/
+# Build output.
+/target/

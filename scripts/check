@@ -1,0 +1,32 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Every gate CI runs, in order; stops at the first failure.
+#
+#   scripts/check
+#
+# CARGO_CMD, if set, is the cargo command to use (for example a wrapper that
+# limits concurrent builds); it must accept cargo's own arguments.
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root"
+cargo=${CARGO_CMD:-cargo}
+
+step() { printf '\n==> %s\n' "$*"; }
+
+step format;               $cargo fmt --check
+step "clippy (pedantic)";  $cargo clippy --all-features --all-targets -- -D warnings
+step "build, no features"; $cargo build
+step "tests, vectors, drift, examples, doc tests"; $cargo test --all-features
+step docs;                 RUSTDOCFLAGS="-D warnings" $cargo doc --all-features --no-deps
+step package;              $cargo package --allow-dirty
+step dependencies;         scripts/check-deps
+for tool in deny audit; do
+	if ! $cargo $tool --version >/dev/null 2>&1; then
+		echo "scripts/check: cargo-$tool is missing: cargo install --locked cargo-$tool" >&2
+		exit 1
+	fi
+done
+step "advisories, licences, bans"; $cargo deny check
+step "advisories (RustSec)";       $cargo audit
+printf '\nall gates passed\n'

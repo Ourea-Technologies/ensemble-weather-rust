@@ -1,0 +1,58 @@
+#!/bin/sh
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Copy ensemble-weather-spec into spec/ at the ref named in spec/VERSION.
+#
+#   scripts/sync-spec                 write spec/ from the ref in spec/VERSION
+#   scripts/sync-spec --check         exit 1 if spec/ differs from that ref
+#   scripts/sync-spec --ref v1.0.0    write spec/ from another ref (and VERSION)
+#
+# The source is https://github.com/Ourea-Technologies/ensemble-weather-spec,
+# or a local clone named by OUREA_SPEC_REPO (for working offline).
+set -eu
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+remote=https://github.com/Ourea-Technologies/ensemble-weather-spec
+mode=write
+ref=
+
+while [ $# -gt 0 ]; do
+	case $1 in
+	--check) mode=check ;;
+	--ref) shift; ref=$1 ;;
+	-h | --help) sed -n '3,11p' "$0"; exit 0 ;;
+	*) echo "sync-spec: unknown argument: $1" >&2; exit 2 ;;
+	esac
+	shift
+done
+
+[ -n "$ref" ] || ref=$(tr -d '[:space:]' <"$root/spec/VERSION")
+[ -n "$ref" ] || { echo "sync-spec: spec/VERSION is empty" >&2; exit 2; }
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT INT TERM
+
+if [ -n "${OUREA_SPEC_REPO:-}" ]; then
+	src=$OUREA_SPEC_REPO
+else
+	git clone --quiet --filter=blob:none --no-checkout "$remote" "$tmp/repo"
+	src=$tmp/repo
+fi
+
+mkdir "$tmp/tree"
+git -C "$src" archive --format=tar "$ref" | tar -x -C "$tmp/tree"
+printf '%s\n' "$ref" >"$tmp/tree/VERSION"
+
+if [ "$mode" = check ]; then
+	if diff -r "$tmp/tree" "$root/spec" >"$tmp/diff"; then
+		echo "spec/ matches ensemble-weather-spec at $ref"
+	else
+		cat "$tmp/diff" >&2
+		echo "sync-spec: spec/ differs from ensemble-weather-spec at $ref; run scripts/sync-spec" >&2
+		exit 1
+	fi
+else
+	rm -rf "$root/spec"
+	mv "$tmp/tree" "$root/spec"
+	echo "spec/ written from ensemble-weather-spec at $ref"
+fi
