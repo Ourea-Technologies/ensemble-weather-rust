@@ -1,0 +1,36 @@
+name: Feature request
+description: Ask for something the Rust SDK (or the API behind it) does not do yet.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Start with the problem; the best API often comes out of the discussion.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: The API you would like
+      description: A sketch of the call you would write, if you have one.
+      render: rust
+  - type: dropdown
+    id: server
+    attributes:
+      label: Does it need a server change?
+      description: The SDK carries what the server computes and never does statistics itself, so new numbers (a new probability or total) need the API. Those requests may be moved to ensemble-weather-spec.
+      options:
+        - "No: the SDK alone can do it"
+        - "Yes: it needs a new API parameter or answer"
+        - "Not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered

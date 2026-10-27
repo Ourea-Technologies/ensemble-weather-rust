@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: BSD-2-Clause
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  spec:
+    name: Spec pin
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: spec/ matches the ref in spec/VERSION
+        run: scripts/sync-spec --check
+
+  lint:
+    name: Format, clippy, docs, dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1 (master)
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: rustfmt
+        run: cargo fmt --check
+      - name: clippy (pedantic, warnings are errors)
+        run: cargo clippy --all-features --all-targets --locked -- -D warnings
+      - name: Docs build (warnings are errors)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --all-features --no-deps --locked
+      - name: No unjustified runtime dependencies
+        run: scripts/check-deps
+
+  test:
+    name: Test (Rust ${{ matrix.rust }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        # The MSRV (Cargo.toml rust-version) and the latest stable.
+        rust: ["1.96", stable]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1 (master)
+        with:
+          toolchain: ${{ matrix.rust }}
+      - name: Build without default features
+        run: cargo build --locked
+      - name: Unit tests, the shared vectors, spec drift, the examples (against the local stub) and doc tests
+        run: cargo test --all-features --locked
+      - name: Package (the crate as published builds)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo package --locked
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1 (master)
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-llvm-cov
+      - name: Coverage (reported, not gated before 1.0)
+        run: cargo llvm-cov --all-features --locked --summary-only | tee -a "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and show-and-tell
+    url: https://github.com/Ourea-Technologies/ensemble-weather-rust/discussions
+    about: Ask how to do something, or share what you built, in GitHub Discussions.
+  - name: Documentation
+    url: https://docs.oureawx.com/rust
+    about: Guides for the Rust SDK and the Ourea API.
+  - name: Report a security vulnerability
+    url: https://github.com/Ourea-Technologies/ensemble-weather-rust/security/advisories/new
+    about: Report privately; never in a public issue.

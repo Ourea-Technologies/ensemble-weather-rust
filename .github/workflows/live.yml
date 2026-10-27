@@ -1,0 +1,37 @@
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Nightly contract run against the live API with a read-only CI key. It never
+# runs for pull requests (so never for forks) and skips when the secret is
+# absent.
+name: Live
+
+on:
+  schedule:
+    - cron: "23 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: Contract run against api.oureawx.com
+    if: github.repository == 'Ourea-Technologies/ensemble-weather-rust'
+    runs-on: ubuntu-latest
+    env:
+      HAS_KEY: ${{ secrets.OUREA_CI_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1 (master)
+        with:
+          toolchain: stable
+      - name: Quickstart (anonymous)
+        if: env.HAS_KEY == 'true'
+        run: cargo run --locked --example quickstart
+      - name: Contract tests (read-only key)
+        if: env.HAS_KEY == 'true'
+        env:
+          OUREA_LIVE_API_KEY: ${{ secrets.OUREA_CI_API_KEY }}
+        run: cargo test --locked --all-features --test live -- --ignored --nocapture

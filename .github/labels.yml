@@ -1,0 +1,24 @@
+# The standard labels (SDK-STANDARD, "Community and contributing"). Applied to
+# the repository at publish time, e.g. with `gh label create` or a label-sync
+# action; nothing reads this file automatically yet.
+- name: bug
+  color: d73a4a
+  description: Something does not work as documented
+- name: enhancement
+  color: a2eeef
+  description: A new feature or an improvement
+- name: documentation
+  color: 0075ca
+  description: Docs, README, doc comments or examples
+- name: good first issue
+  color: 7057ff
+  description: A well-scoped starter task for a new contributor
+- name: help wanted
+  color: 008672
+  description: We would welcome a contribution here
+- name: question
+  color: d876e3
+  description: A question (Discussions is often the better place)
+- name: needs-spec
+  color: fbca04
+  description: Needs an API or ensemble-weather-spec change first

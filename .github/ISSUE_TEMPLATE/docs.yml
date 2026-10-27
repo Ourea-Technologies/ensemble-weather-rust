@@ -1,0 +1,27 @@
+name: Documentation problem
+description: A wrong, unclear or missing docs page, README section, doc comment or example.
+labels: [documentation]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping keep the docs right. Small fixes are very welcome as pull requests too.
+  - type: input
+    id: where
+    attributes:
+      label: Where
+      description: The URL (docs.oureawx.com or docs.rs), the README section, or the file and item.
+      placeholder: https://docs.rs/ensemble-weather/latest/ensemble_weather/struct.Chance.html
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What is wrong or unclear
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: What it should say
+      description: Optional, but it helps.

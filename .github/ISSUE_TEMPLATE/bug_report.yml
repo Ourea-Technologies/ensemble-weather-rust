@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in the Rust SDK does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. Security problems: please report them privately instead (see SECURITY.md).
+        **Never paste an API key into an issue.**
+  - type: input
+    id: version
+    attributes:
+      label: SDK version
+      description: "`ensemble_weather::VERSION`, or the version in your Cargo.lock."
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Rust version and OS
+      description: "`rustc --version` and your OS; say whether you use the async or the blocking client."
+      placeholder: rustc 1.98.0, Ubuntu 24.04, async client
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: The call you made, what you expected, and what you got instead (the error's Display output helps).
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest snippet that shows the problem, ideally runnable. Remove any API key.
+      render: rust
+    validations:
+      required: true
+  - type: input
+    id: request-id
+    attributes:
+      label: Request ID
+      description: "From the error, if there is one: `err.api_error().and_then(|e| e.request_id())`. It lets us find the request in our logs."
+      placeholder: 01HV...
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Logs, screenshots, or what you already tried.
