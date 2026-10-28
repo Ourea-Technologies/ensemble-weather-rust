@@ -7,7 +7,8 @@ use std::time::Duration;
 use super::mock::MockTransport;
 use crate::error::ConnectionErrorKind;
 use crate::{
-    Category, Chance, Client, Error, LocationType, Point, Threshold, Total, Units, Variable, Window,
+    Category, Chance, Client, Error, ErrorCode, LocationType, NullReason, Point, StationNetwork,
+    StationStatus, TemplateVariant, Threshold, Total, Units, Variable, Window,
 };
 
 const FORECAST: &str = include_str!("../../spec/vectors/bodies/forecast-metric.json");
@@ -67,27 +68,25 @@ async fn every_operation_sends_its_canonical_url() {
         .catalog_locations()
         .admin1("US-OR")
         .country("US")
-        .kind("SkiArea")
-        .template("Mountain")
+        .kind(LocationType::SkiArea)
+        .template(TemplateVariant::Mountain)
         .limit(20)
         .await;
     let _ = c
         .catalog_location("mt-hood-meadows")
-        .include(["content", "ads"])
+        .include(["template", "content"])
         .locale("en")
         .await;
     let _ = c
         .catalog_stations()
-        .networks(["Snotel"])
+        .networks([StationNetwork::Snotel, StationNetwork::Raws])
         .capabilities(["swe", "snow_depth", "swe"])
-        .status("Active")
+        .status(StationStatus::Active)
         .limit(50)
         .await;
     let _ = c.catalog_station("a-station").locale("es").await;
     let _ = c.runs().limit(10).await;
     let _ = c.runs().limit(3).await;
-    let _ = c.storm_reports().limit(5).await;
-    let _ = c.storm_report(42).await;
     let _ = c.attribution().await;
     let _ = c
         .forecast("or/mt-hood-meadows")
@@ -100,7 +99,7 @@ async fn every_operation_sends_its_canonical_url() {
         .await;
     let _ = c
         .forecast_at(Point::new(45.3311, -121.6649).elevation_m(1661.0))
-        .feels_like(["utci", "nws"])
+        .include(["skin_temperature", "mslp", "mslp"])
         .await;
     let base = "https://api.example.test/api/v1";
     let want = [
@@ -113,17 +112,15 @@ async fn every_operation_sends_its_canonical_url() {
         "/search/locations?q=hood&state=or&type=ski_area",
         "/locations",
         "/locations/or?cursor=x&limit=100&type=summit",
-        "/catalog/locations?admin1=US-OR&country=US&template=Mountain&type=SkiArea",
-        "/catalog/locations/mt-hood-meadows?include=content%2Cads",
-        "/catalog/stations?capability=snow_depth&capability=swe&limit=50&network=Snotel&status=Active",
+        "/catalog/locations?admin1=US-OR&country=US&template=mountain&type=ski_area",
+        "/catalog/locations/mt-hood-meadows?include=template%2Ccontent",
+        "/catalog/stations?capability=snow_depth%2Cswe&limit=50&network=raws%2Csnotel&status=active",
         "/catalog/stations/a-station?locale=es",
         "/runs",
         "/runs?limit=3",
-        "/storm-reports?limit=5",
-        "/storm-reports/42",
         "/attribution",
         "/locations/or/mt-hood-meadows?diagnostics=provenance&elevations=all&max_days=7&run=2026-11-15T00%3A00%3A00Z&sources=snotel%2Cmesonet",
-        "/forecast?elevation_m=1661&feels_like=utci%2Cnws&lat=45.3311&lon=-121.6649",
+        "/forecast?elevation_m=1661&include=mslp%2Cskin_temperature&lat=45.3311&lon=-121.6649",
     ];
     let urls = mock.urls();
     assert_eq!(urls.len(), want.len());
@@ -140,7 +137,7 @@ async fn every_operation_sends_its_canonical_url() {
         keyed,
         [
             true, true, true, true, true, true, false, true, true, true, false, true, false, true,
-            true, true, true, false, true, true
+            true, false, true, true
         ]
     );
 }
@@ -220,6 +217,67 @@ async fn retry_after_http_date_and_504_are_honoured() {
     mock.push_json(FORECAST);
     assert!(c.forecast("or/mt-hood-meadows").await.is_ok());
     assert_eq!(mock.requests().len(), 3);
+
+    // A 504's Retry-After sets the delay exactly (BEHAVIOR 9).
+    let mock = MockTransport::new();
+    let c = build(client(&mock));
+    mock.push(504, &[("Retry-After", "7")], "{}");
+    mock.push_json(FORECAST);
+    let start = tokio::time::Instant::now();
+    assert!(c.forecast("or/mt-hood-meadows").await.is_ok());
+    assert_eq!(start.elapsed(), Duration::from_secs(7));
+}
+
+#[tokio::test(start_paused = true)]
+async fn error_bodies_carry_request_id_doc_url_param_and_nearest_location() {
+    let mock = MockTransport::new();
+    let c = build(client(&mock));
+    mock.push(
+        403,
+        &[("X-Request-Id", "header-id")],
+        r#"{"error":"PRO_REQUIRED","message":"pro","request_id":"body-id",
+            "doc_url":"https://docs.oureawx.com/features/errors/#pro_required",
+            "nearest_location":{"slug":"mt-hood-meadows","url":"/api/v1/locations/or/mt-hood-meadows",
+            "distance_km":4.25,"elevation_m":1635.6}}"#,
+    );
+    let err = c.forecast_at(Point::new(45.33, -121.67)).await.unwrap_err();
+    let api = err.api_error().unwrap();
+    assert_eq!(api.code(), Some(&ErrorCode::ProRequired));
+    assert_eq!(api.request_id(), Some("body-id"));
+    assert_eq!(
+        api.doc_url(),
+        Some("https://docs.oureawx.com/features/errors/#pro_required")
+    );
+    let near = api.nearest_location().unwrap();
+    assert_eq!(
+        (near.slug.as_str(), near.distance_km),
+        ("mt-hood-meadows", 4.25)
+    );
+
+    mock.push(
+        400,
+        &[("X-Request-Id", "header-id")],
+        r#"{"error":"BAD_REQUEST","message":"bad","param":"max_hours"}"#,
+    );
+    let err = c.forecast("or/mt-hood-meadows").await.unwrap_err();
+    let api = err.api_error().unwrap();
+    assert_eq!(api.param(), Some("max_hours"));
+    assert_eq!(api.request_id(), Some("header-id"));
+    assert!(api.nearest_location().is_none());
+
+    // Codes the public spec dropped keep their string and map by status.
+    mock.push(410, &[], r#"{"error":"GONE","message":"gone"}"#);
+    let err = c.forecast("or/mt-hood-meadows").await.unwrap_err();
+    assert_eq!(err.category(), Category::NotFound);
+    assert_eq!(err.code().map(ErrorCode::as_str), Some("GONE"));
+    mock.push(
+        503,
+        &[],
+        r#"{"error":"AUTH_UNAVAILABLE","message":"later"}"#,
+    );
+    let c = build(client(&mock).max_retries(0));
+    let err = c.forecast("or/mt-hood-meadows").await.unwrap_err();
+    assert_eq!(err.category(), Category::Unavailable);
 }
 
 #[tokio::test(start_paused = true)]
@@ -271,8 +329,10 @@ async fn a_partial_answer_is_an_error_and_no_answer_stays_empty() {
 
     let mut body: serde_json::Value = serde_json::from_str(FORECAST).unwrap();
     body["probabilities"] = serde_json::json!([{
+        "term": "snowfall:ge:10.00:24h",
         "variable": "snowfall", "op": "ge", "threshold": 10.0, "window_start_hours": 0, "window_end_hours": 24,
-        "aggregation": "total", "from": null, "to": null, "probability": 0.5, "members": 131
+        "aggregation": "total", "from": null, "to": null, "probability": 0.5, "members": 131,
+        "null_reason": null
     }]);
     mock.push_json(body.to_string().as_str());
     let err = c
@@ -288,6 +348,35 @@ async fn a_partial_answer_is_an_error_and_no_answer_stays_empty() {
         .await
         .unwrap_err();
     assert_eq!(err.category(), Category::Unavailable, "{err}");
+
+    // Answers are matched by their echoed term, never by position.
+    body["probabilities"] = serde_json::json!([
+        {"term": "snowfall:ge:20.00:24h", "variable": "snowfall", "op": "ge", "threshold": 20.0,
+         "window_start_hours": 0, "window_end_hours": 24, "aggregation": "total", "from": null, "to": null,
+         "probability": null, "members": 0, "null_reason": "window_not_covered"},
+        {"term": "snowfall:ge:10.00:24h", "variable": "snowfall", "op": "ge", "threshold": 10.0,
+         "window_start_hours": 0, "window_end_hours": 24, "aggregation": "total", "from": null, "to": null,
+         "probability": 0.5, "members": 131, "null_reason": null}
+    ]);
+    mock.push_json(body.to_string().as_str());
+    let f = c
+        .forecast("or/mt-hood-meadows")
+        .chance(Chance::at_least(
+            Variable::Snowfall,
+            Threshold::millimeters(10.0),
+        ))
+        .chance(Chance::at_least(
+            Variable::Snowfall,
+            Threshold::millimeters(20.0),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(f.probabilities[0].probability, Some(0.5));
+    assert_eq!(f.probabilities[1].probability, None);
+    assert_eq!(
+        f.probabilities[1].null_reason,
+        Some(NullReason::WindowNotCovered)
+    );
 }
 
 #[tokio::test(start_paused = true)]

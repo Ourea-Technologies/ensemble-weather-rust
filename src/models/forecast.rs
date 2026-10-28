@@ -5,8 +5,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::enums::{
-    ClampedOption, Condition, ElevationSource, FreezingLevelKind, GapFlowStatus, InversionKind,
-    MembersView, MoonPhase, NowcastSource, PrecipKind, Season, StormOrientation, WindStatus,
+    ClampedOption, Condition, ConditionIcon, ElevationSource, FreezingLevelKind, GapFlowStatus,
+    InversionKind, MembersView, MoonPhase, NowcastSource, NullReason, PrecipKind, Season,
+    StormOrientation, WindStatus,
 };
 use crate::meta::{ResponseMeta, with_meta};
 use crate::models::{CurrentConditions, LocationRef, ResponseAttribution};
@@ -21,9 +22,7 @@ use crate::units::{Unit, Units};
 /// [`Chance`](crate::Chance) for a probability or a [`Total`](crate::Total)
 /// for a window total.
 ///
-/// For wind direction the quantiles describe an arc on the circle, not an
-/// interval: `max` may be numerically less than `min`. The SDK does not
-/// "fix" this.
+/// Wind direction is not a `Quantiles`: it is a [`CircularStats`].
 ///
 /// ```
 /// # use ensemble_weather::Quantiles;
@@ -185,6 +184,9 @@ pub struct Forecast {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ProbabilityResult {
+    /// The canonical term the SDK sent, echoed by the server; the SDK matches
+    /// each answer to the caller's [`Chance`](crate::Chance) by it.
+    pub term: String,
     /// The variable.
     pub variable: Variable,
     /// The comparison.
@@ -204,18 +206,23 @@ pub struct ProbabilityResult {
     pub from: Option<String>,
     /// The window's exclusive end (RFC 3339); `None` when not covered.
     pub to: Option<String>,
-    /// The share of members meeting the term, 0..1. `None` when the served
-    /// series does not reach the window's end: absent, never 0.
+    /// The share of members meeting the term, 0..1. `None` when the server
+    /// could not answer (see `null_reason`): absent, never 0.
     pub probability: Option<f64>,
     /// The number of members that voted.
     pub members: u32,
+    /// Why `probability` is `None`; `None` when it is set.
+    pub null_reason: Option<NullReason>,
 }
 
 /// The distribution of each member's own total over a window.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct WindowTotal {
-    /// Precipitation or snowfall.
+    /// The canonical term the SDK sent, echoed by the server; the SDK matches
+    /// each answer to the caller's [`Total`](crate::Total) by it.
+    pub term: String,
+    /// The variable.
     pub variable: Variable,
     /// The quantiles' unit (set by the SDK from the response's units).
     #[serde(skip)]
@@ -224,14 +231,20 @@ pub struct WindowTotal {
     pub window_start_hours: u32,
     /// The window's end hour.
     pub window_end_hours: u32,
+    /// How each member's hours were combined (`total` for precipitation and
+    /// snowfall).
+    pub aggregation: Aggregation,
     /// The window's first instant (RFC 3339); `None` when not covered.
     pub from: Option<String>,
     /// The window's exclusive end (RFC 3339); `None` when not covered.
     pub to: Option<String>,
-    /// The distribution; `None` when the forecast does not cover the window.
+    /// The distribution; `None` when the server could not answer (see
+    /// `null_reason`).
     pub quantiles: Option<Quantiles>,
     /// The number of members.
     pub members: u32,
+    /// Why `quantiles` is `None`; `None` when it is set.
+    pub null_reason: Option<NullReason>,
 }
 
 /// The fixed thresholds behind the hourly and daily probabilities, in the
@@ -244,10 +257,10 @@ pub struct ProbabilityThresholds {
     pub hourly_precipitation: f64,
     /// Behind each hour's snowfall probability.
     pub hourly_snowfall: f64,
-    /// Behind each day's `precip_probability`.
-    pub daily_precip_probability: f64,
-    /// Behind each day's `precip_occurrence_probability`.
-    pub daily_precip_occurrence_probability: f64,
+    /// Behind each day's `precipitation_probability`.
+    pub daily_precipitation_probability: f64,
+    /// Behind each day's `precipitation_occurrence_probability`.
+    pub daily_precipitation_occurrence_probability: f64,
     /// Behind each day's `snow_probability`.
     pub daily_snow_probability: f64,
 }
@@ -410,12 +423,12 @@ pub struct TimeSeriesPoint {
     pub condition: Condition,
     /// The condition, for display.
     pub condition_text: String,
-    /// The icon name.
-    pub condition_icon: String,
+    /// The icon hint.
+    pub condition_icon: ConditionIcon,
     /// Whether gusts are notable.
     pub gust_notable: Option<bool>,
     /// The precipitation type with its probabilities.
-    pub precip_type: Option<PrecipType>,
+    pub precipitation_type: Option<PrecipType>,
     /// A detected inversion or cold pool.
     pub inversion: Option<InversionInfo>,
     /// The freezing level.
@@ -505,17 +518,21 @@ pub struct Sector {
     pub to: f64,
 }
 
-/// Wind direction as a circular distribution.
+/// Wind direction as a circular distribution, degrees clockwise from north.
+///
+/// Each sector is a clockwise arc, so its `to` may be numerically less than
+/// its `from` (the arc crosses north). The SDK does not "fix" this.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct CircularStats {
-    /// The circular mean, degrees.
+    /// The members' resultant-vector mean direction, in `[0, 360)`.
     pub mean: f64,
-    /// The circular standard deviation, degrees.
+    /// The members' angular spread around `mean`; `None` on a single-member
+    /// hour.
     pub stddev: Option<f64>,
-    /// The narrowest arc holding half the members.
+    /// The central 50 % of the members (25th to 75th circular percentile).
     pub sector_50: Sector,
-    /// The narrowest arc holding 90 % of the members.
+    /// The central 90 % of the members (5th to 95th circular percentile).
     pub sector_90: Sector,
 }
 
@@ -602,8 +619,6 @@ pub struct EnsembleStats {
     pub temperature: Quantiles,
     /// The feels like distribution.
     pub feels_like: Option<Quantiles>,
-    /// The feels like UTCI distribution.
-    pub feels_like_utci: Option<Quantiles>,
     /// The dewpoint distribution.
     pub dewpoint: Option<Quantiles>,
     /// The precipitation distribution.
@@ -612,11 +627,8 @@ pub struct EnsembleStats {
     pub wind_speed: Quantiles,
     /// The wind gust distribution.
     pub wind_gust: Option<Quantiles>,
-    /// Circular: the quantiles describe an arc, and `max` may be less than
-    /// `min`. Prefer `wind_direction_circular`.
-    pub wind_direction: Quantiles,
-    /// Wind direction as a circular distribution.
-    pub wind_direction_circular: Option<CircularStats>,
+    /// The circular distribution of the members' wind directions.
+    pub wind_direction: CircularStats,
     /// The snow level distribution.
     pub snow_level: Option<Quantiles>,
     /// The snow-to-liquid ratio distribution.
@@ -625,11 +637,9 @@ pub struct EnsembleStats {
     pub snowfall: Option<Quantiles>,
     /// The cloud cover distribution.
     pub cloud_cover: Option<Quantiles>,
-    /// The skin temperature distribution.
+    /// The skin temperature distribution (with `include("skin_temperature")`).
     pub skin_temperature: Option<Quantiles>,
-    /// The precipitation-type distribution.
-    pub ptype: Option<Quantiles>,
-    /// The mean sea-level pressure distribution.
+    /// The mean sea-level pressure distribution (with `include("mslp")`).
     pub mslp: Option<Quantiles>,
     /// The CAPE distribution.
     pub cape: Option<Quantiles>,
@@ -668,8 +678,8 @@ pub struct ModelMean {
     pub precipitation: Option<Quantiles>,
     /// The wind speed distribution.
     pub wind_speed: Option<Quantiles>,
-    /// The wind direction distribution.
-    pub wind_direction: Option<Quantiles>,
+    /// The circular distribution of the wind direction.
+    pub wind_direction: Option<CircularStats>,
     /// The snow level distribution.
     pub snow_level: Option<Quantiles>,
     /// The snow-to-liquid ratio distribution.
@@ -690,10 +700,10 @@ pub struct DailyForecast {
     pub condition: Condition,
     /// The condition, for display.
     pub condition_text: String,
-    /// The icon name.
-    pub condition_icon: String,
+    /// The icon hint.
+    pub condition_icon: ConditionIcon,
     /// The precipitation type; `None` when the day is unlikely to precipitate.
-    pub precip_type: Option<PrecipKind>,
+    pub precipitation_type: Option<PrecipKind>,
     /// The day's high.
     pub high: Quantiles,
     /// The day's low.
@@ -702,18 +712,14 @@ pub struct DailyForecast {
     pub feels_like_high: Option<Quantiles>,
     /// The feels-like low.
     pub feels_like_low: Option<Quantiles>,
-    /// The UTCI feels-like high.
-    pub feels_like_utci_high: Option<Quantiles>,
-    /// The UTCI feels-like low.
-    pub feels_like_utci_low: Option<Quantiles>,
     /// The distribution of each member's own day total.
-    pub total_precip: Quantiles,
+    pub total_precipitation: Quantiles,
     /// The distribution of each member's own day snowfall.
     pub total_snowfall: Option<Quantiles>,
     /// P(day total ≥ the daily precipitation threshold).
-    pub precip_probability: f64,
+    pub precipitation_probability: f64,
     /// P(day total ≥ the occurrence threshold).
-    pub precip_occurrence_probability: f64,
+    pub precipitation_occurrence_probability: f64,
     /// P(day snowfall ≥ the daily snow threshold).
     pub snow_probability: f64,
     /// The mean snow level.
@@ -721,11 +727,11 @@ pub struct DailyForecast {
     /// The snow level's distribution.
     pub snow_level: Option<Quantiles>,
     /// The day total among the wet members.
-    pub total_precip_if_wet: Option<Quantiles>,
+    pub total_precipitation_if_wet: Option<Quantiles>,
     /// The day snowfall among the wet members.
     pub total_snowfall_if_wet: Option<Quantiles>,
     /// The precipitation headline, for display.
-    pub precip_display: PrecipDisplay,
+    pub precipitation_display: PrecipDisplay,
     /// The mean cloud cover.
     pub cloud_cover_mean: Option<f64>,
     /// The day's wind.
@@ -803,17 +809,11 @@ pub struct ElevationForecast {
     pub name: String,
     /// The elevation, in the request's length unit.
     pub elevation: f64,
-    /// Whether this is the primary elevation.
-    #[serde(default)]
-    pub default: bool,
     /// The latitude.
     pub lat: f64,
     /// The longitude.
     pub lon: f64,
-    /// A compact hourly series.
-    #[serde(default)]
-    pub timeseries: Vec<ElevationHour>,
-    /// The full hourly series.
+    /// The hourly series.
     #[serde(default)]
     pub hourly: Vec<TimeSeriesPoint>,
     /// Daily summaries.
@@ -821,32 +821,6 @@ pub struct ElevationForecast {
     pub daily: Vec<DailyForecast>,
     /// Snow totals.
     pub snow_outlook: Option<SnowOutlook>,
-}
-
-/// One hour of an elevation forecast's compact series.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct ElevationHour {
-    /// The hour (RFC 3339).
-    pub valid_time: String,
-    /// Hours since the run's init.
-    pub lead_time_hours: i32,
-    /// The temperature distribution.
-    pub temperature: Quantiles,
-    /// The snow level relative to this elevation.
-    pub snow_level_delta: Option<Quantiles>,
-    /// The wind speed distribution.
-    pub wind_speed: Option<Quantiles>,
-    /// The wind gust distribution.
-    pub wind_gust: Option<Quantiles>,
-    /// The precipitation distribution.
-    pub precipitation: Quantiles,
-    /// The condition code.
-    pub condition: Condition,
-    /// The condition, for display.
-    pub condition_text: String,
-    /// The icon name.
-    pub condition_icon: String,
 }
 
 with_meta!(Forecast);

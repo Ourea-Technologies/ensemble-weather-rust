@@ -75,11 +75,14 @@ string_enum! {
 }
 
 string_enum! {
-    /// How a probability term combines the hours of its window.
+    /// How a probability term or a window total combines the hours of its
+    /// window.
     ///
-    /// Precipitation and snowfall take only [`Aggregation::Total`]; the other
-    /// variables take [`Aggregation::Any`] (their default) or
-    /// [`Aggregation::All`].
+    /// In a [`Chance`], precipitation and snowfall take only
+    /// [`Aggregation::Total`]; the other variables take [`Aggregation::Any`]
+    /// (their default) or [`Aggregation::All`]. [`Aggregation::Min`] and
+    /// [`Aggregation::Max`] appear only in a [`WindowTotal`] the server
+    /// answered.
     ///
     /// ```
     /// use ensemble_weather::Aggregation;
@@ -92,6 +95,10 @@ string_enum! {
         Any => "any",
         /// Every hour of the window crosses the threshold.
         All => "all",
+        /// Each member's lowest value over the window (window totals only).
+        Min => "min",
+        /// Each member's highest value over the window (window totals only).
+        Max => "max",
     }
 }
 
@@ -101,7 +108,9 @@ impl Aggregation {
             Self::Total => 0,
             Self::Any => 1,
             Self::All => 2,
-            Self::Unknown(_) => 3,
+            Self::Min => 3,
+            Self::Max => 4,
+            Self::Unknown(_) => 5,
         }
     }
 }
@@ -310,16 +319,8 @@ struct Term {
 }
 
 impl Term {
-    fn key(&self) -> String {
-        term_key(
-            &self.variable,
-            &self.op,
-            &self.text,
-            self.window,
-            &self.aggregation,
-        )
-    }
-
+    /// The term's canonical spelling: what the SDK sends and the server
+    /// echoes in `ProbabilityResult::term`.
     fn wire(&self) -> String {
         let mut s = format!(
             "{}:{}:{}:{}",
@@ -331,16 +332,6 @@ impl Term {
         }
         s
     }
-}
-
-fn term_key(
-    variable: &Variable,
-    op: &Op,
-    text: &str,
-    window: Window,
-    aggregation: &Aggregation,
-) -> String {
-    format!("{variable}:{op}:{text}:{window}:{aggregation}")
 }
 
 fn prepare(operation: &'static str, chance: &Chance, units: &Units) -> Result<Term, Error> {
@@ -365,6 +356,11 @@ fn prepare(operation: &'static str, chance: &Chance, units: &Units) -> Result<Te
     match (&aggregation, chance.variable.is_amount()) {
         (Aggregation::Unknown(raw), _) => {
             return Err(usage(format!("chance: unknown aggregation {raw:?}")));
+        }
+        (Aggregation::Min | Aggregation::Max, _) => {
+            return Err(usage(format!(
+                "chance: {aggregation} is a window-total aggregation; use any or all"
+            )));
         }
         (Aggregation::Total, false) => {
             return Err(usage(format!(
@@ -410,7 +406,8 @@ fn prepare(operation: &'static str, chance: &Chance, units: &Units) -> Result<Te
     })
 }
 
-/// The canonical `prob=` value plus each caller term's key, in the caller's order.
+/// The canonical `prob=` value plus each caller term's canonical spelling, in
+/// the caller's order.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ChanceQuery {
     pub(crate) value: Option<String>,
@@ -429,7 +426,7 @@ pub(crate) fn build_chances(
     let mut unique: HashMap<String, Term> = HashMap::new();
     for chance in chances {
         let term = prepare(operation, chance, units)?;
-        let key = term.key();
+        let key = term.wire();
         keys.push(key.clone());
         unique.entry(key).or_insert(term);
     }
@@ -450,20 +447,9 @@ pub(crate) fn build_chances(
     })
 }
 
-fn result_key(result: &ProbabilityResult, units: &Units) -> String {
-    let window = Window::between(result.window_start_hours, result.window_end_hours);
-    let text = format_threshold(result.threshold, result.variable.precision(units));
-    term_key(
-        &result.variable,
-        &result.op,
-        &text,
-        window,
-        &result.aggregation,
-    )
-}
-
-/// Reorders the server's answers (in canonical order) into the caller's order,
-/// duplicates sharing one answer, and labels each threshold with its unit.
+/// Matches the server's answers to the caller's terms by their echoed
+/// canonical `term` (never by position), in the caller's order, duplicates
+/// sharing one answer, and labels each threshold with its unit.
 ///
 /// A response without any answers stays empty: nothing is invented. A
 /// response that answers some terms but not all is an error.
@@ -480,10 +466,8 @@ pub(crate) fn map_chances(
     if query.keys.is_empty() || results.is_empty() {
         return Ok(results);
     }
-    let by_key: HashMap<String, ProbabilityResult> = results
-        .into_iter()
-        .map(|r| (result_key(&r, units), r))
-        .collect();
+    let by_key: HashMap<String, ProbabilityResult> =
+        results.into_iter().map(|r| (r.term.clone(), r)).collect();
     query
         .keys
         .iter()
@@ -545,7 +529,8 @@ pub(crate) fn build_totals(
     })
 }
 
-/// Reorders window totals into the caller's order, like [`map_chances`].
+/// Matches window totals to the caller's terms by their echoed `term`, like
+/// [`map_chances`].
 pub(crate) fn map_totals(
     operation: &'static str,
     query: &TotalsQuery,
@@ -559,18 +544,8 @@ pub(crate) fn map_totals(
     if query.keys.is_empty() || results.is_empty() {
         return Ok(results);
     }
-    let by_key: HashMap<String, WindowTotal> = results
-        .into_iter()
-        .map(|r| {
-            (
-                total_key(
-                    &r.variable,
-                    Window::between(r.window_start_hours, r.window_end_hours),
-                ),
-                r,
-            )
-        })
-        .collect();
+    let by_key: HashMap<String, WindowTotal> =
+        results.into_iter().map(|r| (r.term.clone(), r)).collect();
     query
         .keys
         .iter()

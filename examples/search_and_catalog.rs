@@ -28,7 +28,7 @@ async fn main() -> Result<(), ensemble_weather::Error> {
         println!(
             "{count:>3}. {} ({})",
             record.location.name,
-            record.location.key()
+            record.location.key().unwrap_or_default()
         );
     }
     Ok(())

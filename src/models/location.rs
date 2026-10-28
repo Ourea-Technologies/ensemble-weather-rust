@@ -2,24 +2,28 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::enums::{Condition, CurrentSource, LocationType, NowcastSource};
+use crate::enums::{
+    AlertCertainty, AlertSeverity, AlertUrgency, Condition, ConditionIcon, CurrentSource,
+    LocationType, NowcastSource,
+};
 use crate::meta::{ResponseMeta, with_meta};
 use crate::models::TimeSeriesPoint;
 use crate::units::Units;
 
-/// A named location.
+/// A named location, or the point of a coordinate request.
 ///
 /// ```
 /// # use ensemble_weather::LocationRef;
-/// fn key(location: &LocationRef) -> String {
-///     location.key() // "or/mt-hood-meadows", as the location methods take it
+/// fn key(location: &LocationRef) -> Option<String> {
+///     location.key() // Some("or/mt-hood-meadows"), as the location methods take it
 /// }
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct LocationRef {
-    /// The location's slug, unique within its state.
-    pub slug: String,
+    /// The location's slug, unique within its state; `None` for a coordinate
+    /// request that matched no named location.
+    pub slug: Option<String>,
     /// The state, as a lowercase USPS code.
     pub state: String,
     /// The display name.
@@ -30,18 +34,21 @@ pub struct LocationRef {
     pub lon: f64,
     /// Elevation in metres, whatever the request's units.
     pub elevation_m: f64,
-    /// The kind of location.
+    /// The kind of location; `None` when `slug` is.
     #[serde(rename = "type")]
-    pub kind: LocationType,
+    pub kind: Option<LocationType>,
     /// The IANA timezone, such as `"America/Los_Angeles"`.
     pub timezone: String,
 }
 
 impl LocationRef {
-    /// The `"state/slug"` form the location methods take.
+    /// The `"state/slug"` form the location methods take; `None` for a
+    /// coordinate request's point.
     #[must_use]
-    pub fn key(&self) -> String {
-        format!("{}/{}", self.state, self.slug)
+    pub fn key(&self) -> Option<String> {
+        self.slug
+            .as_ref()
+            .map(|slug| format!("{}/{slug}", self.state))
     }
 }
 
@@ -66,10 +73,12 @@ pub struct ActiveAlert {
     pub id: String,
     /// The event, such as `"Winter Storm Warning"`.
     pub event: String,
-    /// The severity.
-    pub severity: String,
-    /// The urgency.
-    pub urgency: String,
+    /// The CAP severity.
+    pub severity: AlertSeverity,
+    /// The CAP urgency.
+    pub urgency: AlertUrgency,
+    /// The CAP certainty.
+    pub certainty: AlertCertainty,
     /// The headline.
     pub headline: String,
     /// When it begins (RFC 3339).
@@ -130,8 +139,8 @@ pub struct CurrentConditions {
     pub condition: Condition,
     /// The condition, for display.
     pub condition_text: String,
-    /// The icon name.
-    pub condition_icon: String,
+    /// The icon hint.
+    pub condition_icon: ConditionIcon,
     /// Wind speed.
     pub wind_speed: f64,
     /// Wind gust.
@@ -143,7 +152,7 @@ pub struct CurrentConditions {
     /// Dewpoint.
     pub dewpoint: Option<f64>,
     /// The chance of precipitation this hour, 0..1.
-    pub precip_probability: Option<f64>,
+    pub precipitation_probability: Option<f64>,
     /// Where the values came from.
     pub source: CurrentSource,
     /// The station that anchored the hour, when one did.
@@ -154,6 +163,8 @@ pub struct CurrentConditions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct CurrentStation {
+    /// The station's ID, as in [`SensorObservation::station_id`].
+    pub station_id: String,
     /// The station's name, such as `"KPDX"`.
     pub name: String,
     /// Its observation time (RFC 3339).
@@ -189,7 +200,7 @@ pub struct SensorObservation {
     /// Precipitation.
     pub precipitation: Option<f64>,
     /// Precipitation rate.
-    pub precip_rate: Option<f64>,
+    pub precipitation_rate: Option<f64>,
     /// Radar reflectivity, dBZ.
     pub reflectivity: Option<f64>,
     /// Pavement temperature.

@@ -14,8 +14,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 ///
 /// The API's own failures carry an [`ApiError`] with the HTTP status, the
 /// API's [`ErrorCode`] (kept verbatim, even when unknown) and message, the
-/// request ID and, on a 429, the `Retry-After` delay. Errors never contain the
-/// API key.
+/// request ID, the code's docs link and, on a 429, 503 or 504, the
+/// `Retry-After` delay. Errors never contain the API key.
 ///
 /// ```
 /// use ensemble_weather::{Category, Client, Error, ErrorCode, Point};
@@ -39,13 +39,14 @@ pub enum Error {
     /// The key's plan does not allow the request (403), such as `PRO_REQUIRED`.
     #[error("permission denied: {0}")]
     Permission(Box<ApiError>),
-    /// The location, run or report does not exist (404, 410).
+    /// The location or resource does not exist (404, 410).
     #[error("not found: {0}")]
     NotFound(Box<ApiError>),
     /// The server rejected the request's parameters (400).
     #[error("invalid request: {0}")]
     InvalidRequest(Box<ApiError>),
-    /// The coordinates are outside the forecast domain (`OUTSIDE_COVERAGE`).
+    /// The coordinates are outside the forecast domain (`OUTSIDE_COVERAGE`,
+    /// a 404).
     #[error("outside coverage: {0}")]
     OutsideCoverage(Box<ApiError>),
     /// A rate limit or quota was exceeded (429). See [`ApiError::retry_after`].
@@ -184,7 +185,7 @@ impl Error {
         self.api_error().and_then(ApiError::code)
     }
 
-    /// The server's `Retry-After` on a 429 or 503.
+    /// The server's `Retry-After` on a 429, 503 or 504.
     ///
     /// ```
     /// # use ensemble_weather::Error;
@@ -211,6 +212,9 @@ impl Error {
             code: None,
             message: message.into(),
             request_id: None,
+            doc_url: None,
+            param: None,
+            nearest_location: None,
             retry_after: None,
             rate_limit: None,
         }))
@@ -251,6 +255,9 @@ pub struct ApiError {
     pub(crate) code: Option<ErrorCode>,
     pub(crate) message: String,
     pub(crate) request_id: Option<String>,
+    pub(crate) doc_url: Option<String>,
+    pub(crate) param: Option<String>,
+    pub(crate) nearest_location: Option<NearestLocation>,
     pub(crate) retry_after: Option<Duration>,
     pub(crate) rate_limit: Option<RateLimit>,
 }
@@ -281,13 +288,35 @@ impl ApiError {
         &self.message
     }
 
-    /// The response's `X-Request-Id`, when present. Quote it to support.
+    /// The request's ID: the error body's `request_id`, else the response's
+    /// `X-Request-Id`. Quote it to support.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
         self.request_id.as_deref()
     }
 
-    /// The server's `Retry-After` on a 429 or 503.
+    /// The code's explanation in the API docs (cause, fix, whether to retry),
+    /// when the body links one.
+    #[must_use]
+    pub fn doc_url(&self) -> Option<&str> {
+        self.doc_url.as_deref()
+    }
+
+    /// The query parameter a 400 is about, when it is about one (such as
+    /// `"max_hours"`).
+    #[must_use]
+    pub fn param(&self) -> Option<&str> {
+        self.param.as_deref()
+    }
+
+    /// On a `PRO_REQUIRED` from a coordinate route, the nearby named location
+    /// that answers without a key; `None` when none qualifies.
+    #[must_use]
+    pub fn nearest_location(&self) -> Option<&NearestLocation> {
+        self.nearest_location.as_ref()
+    }
+
+    /// The server's `Retry-After` on a 429, 503 or 504.
     #[must_use]
     pub fn retry_after(&self) -> Option<Duration> {
         self.retry_after
@@ -314,6 +343,23 @@ impl fmt::Display for ApiError {
         }
         Ok(())
     }
+}
+
+/// The named location a `PRO_REQUIRED` error suggests for a coordinate
+/// request: within 10 km of the point and 300 m of its elevation.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[non_exhaustive]
+pub struct NearestLocation {
+    /// The location's slug.
+    pub slug: String,
+    /// The location route's path on this API, such as
+    /// `"/api/v1/locations/or/mt-hood-meadows"` (with `/current` or `/alerts`
+    /// for those routes).
+    pub url: String,
+    /// The distance from the point, km.
+    pub distance_km: f64,
+    /// The location's elevation, metres.
+    pub elevation_m: f64,
 }
 
 /// A call refused before it was sent.
@@ -386,8 +432,9 @@ impl ConnectionError {
 
 string_enum! {
     /// The API's machine-readable error code: the `error` field of an error
-    /// response. A code the SDK does not know is kept verbatim in
-    /// [`ErrorCode::Unknown`] and categorised by HTTP status.
+    /// response, one of the public spec's codes. A code the SDK does not know
+    /// is kept verbatim in [`ErrorCode::Unknown`] and categorised by HTTP
+    /// status.
     ///
     /// ```
     /// use ensemble_weather::ErrorCode;
@@ -401,30 +448,18 @@ string_enum! {
         Unauthorized => "UNAUTHORIZED",
         /// The request needs a Pro key.
         ProRequired => "PRO_REQUIRED",
-        /// The key may not make this request.
-        Forbidden => "FORBIDDEN",
         /// The named location does not exist.
         LocationNotFound => "LOCATION_NOT_FOUND",
-        /// The model run does not exist.
-        ModelRunNotFound => "MODEL_RUN_NOT_FOUND",
         /// The resource does not exist.
         NotFound => "NOT_FOUND",
-        /// The resource is gone.
-        Gone => "GONE",
         /// The request is malformed.
         BadRequest => "BAD_REQUEST",
         /// The coordinates are invalid.
         InvalidCoordinates => "INVALID_COORDINATES",
         /// The elevation is invalid.
         InvalidElevation => "INVALID_ELEVATION",
-        /// `max_hours` is invalid.
-        InvalidMaxHours => "INVALID_MAX_HOURS",
         /// The request needs an elevation.
         ElevationRequired => "ELEVATION_REQUIRED",
-        /// The request is ambiguous.
-        Ambiguous => "AMBIGUOUS",
-        /// The feels-like index asked for is not available.
-        FeelsLikeUnavailable => "FEELS_LIKE_UNAVAILABLE",
         /// The coordinates are outside the forecast domain.
         OutsideCoverage => "OUTSIDE_COVERAGE",
         /// A rate limit or quota was exceeded.
@@ -437,6 +472,8 @@ string_enum! {
         InternalError => "INTERNAL_ERROR",
         /// A database error.
         DatabaseError => "DATABASE_ERROR",
+        /// The server could not check credentials right now.
+        AuthUnavailable => "AUTH_UNAVAILABLE",
     }
 }
 
@@ -447,23 +484,19 @@ impl ErrorCode {
     pub fn category(&self) -> Option<Category> {
         Some(match self {
             Self::InvalidApiKey | Self::Unauthorized => Category::Authentication,
-            Self::ProRequired | Self::Forbidden => Category::Permission,
-            Self::LocationNotFound | Self::ModelRunNotFound | Self::NotFound | Self::Gone => {
-                Category::NotFound
-            }
+            Self::ProRequired => Category::Permission,
+            Self::LocationNotFound | Self::NotFound => Category::NotFound,
             Self::BadRequest
             | Self::InvalidCoordinates
             | Self::InvalidElevation
-            | Self::InvalidMaxHours
-            | Self::ElevationRequired
-            | Self::Ambiguous
-            | Self::FeelsLikeUnavailable => Category::InvalidRequest,
+            | Self::ElevationRequired => Category::InvalidRequest,
             Self::OutsideCoverage => Category::OutsideCoverage,
             Self::TooManyRequests => Category::RateLimited,
             Self::ForecastUnavailable
             | Self::Timeout
             | Self::InternalError
-            | Self::DatabaseError => Category::Unavailable,
+            | Self::DatabaseError
+            | Self::AuthUnavailable => Category::Unavailable,
             Self::Unknown(_) => return None,
         })
     }

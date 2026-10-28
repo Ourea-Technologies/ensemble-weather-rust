@@ -492,38 +492,6 @@ string_enum! {
 }
 
 string_enum! {
-    /// The kind of a catalog ad slot.
-    ///
-    /// ```
-    /// use ensemble_weather::AdSlotKind;
-    /// assert_eq!(AdSlotKind::from("house"), AdSlotKind::House);
-    /// ```
-    pub enum AdSlotKind {
-        /// A house ad.
-        House => "house",
-        /// A third-party ad unit.
-        ThirdParty => "third_party",
-    }
-}
-
-string_enum! {
-    /// A third-party ad provider.
-    ///
-    /// ```
-    /// use ensemble_weather::AdProvider;
-    /// assert_eq!(AdProvider::from("gam"), AdProvider::Gam);
-    /// ```
-    pub enum AdProvider {
-        /// Google AdSense.
-        AdSense => "adsense",
-        /// Google Ad Manager.
-        Gam => "gam",
-        /// A custom provider.
-        Custom => "custom",
-    }
-}
-
-string_enum! {
     /// An option the server reduced to the caller's tier.
     ///
     /// ```
@@ -535,5 +503,303 @@ string_enum! {
         MaxHours => "max_hours",
         /// `max_days`.
         MaxDays => "max_days",
+    }
+}
+
+string_enum! {
+    /// An icon hint for a condition, such as `night_snow`; front ends map it
+    /// to their own artwork.
+    ///
+    /// ```
+    /// use ensemble_weather::ConditionIcon;
+    /// assert_eq!(ConditionIcon::from("night_snow"), ConditionIcon::NightSnow);
+    /// ```
+    pub enum ConditionIcon {
+        /// `sunny`.
+        Sunny => "sunny",
+        /// `mostly_sunny`.
+        MostlySunny => "mostly_sunny",
+        /// `partly_cloudy`.
+        PartlyCloudy => "partly_cloudy",
+        /// `mostly_cloudy`.
+        MostlyCloudy => "mostly_cloudy",
+        /// `cloudy`.
+        Cloudy => "cloudy",
+        /// `sun_chance_showers`.
+        SunChanceShowers => "sun_chance_showers",
+        /// `sun_showers_likely`.
+        SunShowersLikely => "sun_showers_likely",
+        /// `sun_showers`.
+        SunShowers => "sun_showers",
+        /// `chance_showers`.
+        ChanceShowers => "chance_showers",
+        /// `chance_rain`.
+        ChanceRain => "chance_rain",
+        /// `showers_likely`.
+        ShowersLikely => "showers_likely",
+        /// `rain_likely`.
+        RainLikely => "rain_likely",
+        /// `showers`.
+        Showers => "showers",
+        /// `light_rain`.
+        LightRain => "light_rain",
+        /// `rain`.
+        Rain => "rain",
+        /// `heavy_rain`.
+        HeavyRain => "heavy_rain",
+        /// `rain_snow_mix`.
+        RainSnowMix => "rain_snow_mix",
+        /// `snow`.
+        Snow => "snow",
+        /// `freezing_rain`.
+        FreezingRain => "freezing_rain",
+        /// `night_clear`.
+        NightClear => "night_clear",
+        /// `night_mostly_clear`.
+        NightMostlyClear => "night_mostly_clear",
+        /// `night_partly_cloudy`.
+        NightPartlyCloudy => "night_partly_cloudy",
+        /// `night_mostly_cloudy`.
+        NightMostlyCloudy => "night_mostly_cloudy",
+        /// `night_cloudy`.
+        NightCloudy => "night_cloudy",
+        /// `night_moon_chance_showers`.
+        NightMoonChanceShowers => "night_moon_chance_showers",
+        /// `night_moon_showers_likely`.
+        NightMoonShowersLikely => "night_moon_showers_likely",
+        /// `night_moon_showers`.
+        NightMoonShowers => "night_moon_showers",
+        /// `night_chance_showers`.
+        NightChanceShowers => "night_chance_showers",
+        /// `night_chance_rain`.
+        NightChanceRain => "night_chance_rain",
+        /// `night_showers_likely`.
+        NightShowersLikely => "night_showers_likely",
+        /// `night_rain_likely`.
+        NightRainLikely => "night_rain_likely",
+        /// `night_showers`.
+        NightShowers => "night_showers",
+        /// `night_light_rain`.
+        NightLightRain => "night_light_rain",
+        /// `night_rain`.
+        NightRain => "night_rain",
+        /// `night_heavy_rain`.
+        NightHeavyRain => "night_heavy_rain",
+        /// `night_rain_snow_mix`.
+        NightRainSnowMix => "night_rain_snow_mix",
+        /// `night_snow`.
+        NightSnow => "night_snow",
+        /// `night_freezing_rain`.
+        NightFreezingRain => "night_freezing_rain",
+    }
+}
+
+string_enum! {
+    /// An alert's CAP severity.
+    ///
+    /// ```
+    /// use ensemble_weather::AlertSeverity;
+    /// assert_eq!(AlertSeverity::from("severe"), AlertSeverity::Severe);
+    /// ```
+    pub enum AlertSeverity {
+        /// Extreme.
+        Extreme => "extreme",
+        /// Severe.
+        Severe => "severe",
+        /// Moderate.
+        Moderate => "moderate",
+        /// Minor.
+        Minor => "minor",
+        /// The source says it is unknown (`"unknown"`); not to be confused
+        /// with [`AlertSeverity::Unknown`], a value this SDK does not know.
+        UnknownSeverity => "unknown",
+    }
+}
+
+string_enum! {
+    /// An alert's CAP urgency.
+    ///
+    /// ```
+    /// use ensemble_weather::AlertUrgency;
+    /// assert_eq!(AlertUrgency::from("expected"), AlertUrgency::Expected);
+    /// ```
+    pub enum AlertUrgency {
+        /// Immediate.
+        Immediate => "immediate",
+        /// Expected.
+        Expected => "expected",
+        /// Future.
+        Future => "future",
+        /// Past.
+        Past => "past",
+        /// The source says it is unknown (`"unknown"`); not to be confused
+        /// with [`AlertUrgency::Unknown`], a value this SDK does not know.
+        UnknownUrgency => "unknown",
+    }
+}
+
+string_enum! {
+    /// An alert's CAP certainty.
+    ///
+    /// ```
+    /// use ensemble_weather::AlertCertainty;
+    /// assert_eq!(AlertCertainty::from("likely"), AlertCertainty::Likely);
+    /// ```
+    pub enum AlertCertainty {
+        /// Observed.
+        Observed => "observed",
+        /// Likely.
+        Likely => "likely",
+        /// Possible.
+        Possible => "possible",
+        /// Unlikely.
+        Unlikely => "unlikely",
+        /// The source says it is unknown (`"unknown"`); not to be confused
+        /// with [`AlertCertainty::Unknown`], a value this SDK does not know.
+        UnknownCertainty => "unknown",
+    }
+}
+
+string_enum! {
+    /// An observation station's network.
+    ///
+    /// ```
+    /// use ensemble_weather::StationNetwork;
+    /// assert_eq!(StationNetwork::from("snotel"), StationNetwork::Snotel);
+    /// ```
+    pub enum StationNetwork {
+        /// `snotel`.
+        Snotel => "snotel",
+        /// `snolite`.
+        Snolite => "snolite",
+        /// `raws`.
+        Raws => "raws",
+        /// `asos`.
+        Asos => "asos",
+        /// `awos`.
+        Awos => "awos",
+        /// `metar`.
+        Metar => "metar",
+        /// `rwis_wsdot`.
+        RwisWsdot => "rwis_wsdot",
+        /// `rwis_odot`.
+        RwisOdot => "rwis_odot",
+        /// `rwis_caltrans`.
+        RwisCaltrans => "rwis_caltrans",
+        /// `rwis_idot`.
+        RwisIdot => "rwis_idot",
+        /// `rwis_ndot`.
+        RwisNdot => "rwis_ndot",
+        /// `rwis_udot`.
+        RwisUdot => "rwis_udot",
+        /// `rwis_cdot`.
+        RwisCdot => "rwis_cdot",
+        /// `rwis_mdt`.
+        RwisMdt => "rwis_mdt",
+        /// `rwis_wydot`.
+        RwisWydot => "rwis_wydot",
+        /// `rwis_other`.
+        RwisOther => "rwis_other",
+        /// `agrimet`.
+        Agrimet => "agrimet",
+        /// `agweathernet`.
+        Agweathernet => "agweathernet",
+        /// `cocorahs`.
+        Cocorahs => "cocorahs",
+        /// `coop`.
+        Coop => "coop",
+        /// `usgs`.
+        Usgs => "usgs",
+        /// `tempest`.
+        Tempest => "tempest",
+        /// `davis`.
+        Davis => "davis",
+        /// `wxflow`.
+        Wxflow => "wxflow",
+        /// `cdec`.
+        Cdec => "cdec",
+        /// `cimis`.
+        Cimis => "cimis",
+        /// `mesonet_oregon`.
+        MesonetOregon => "mesonet_oregon",
+        /// `mesonet_synoptic`.
+        MesonetSynoptic => "mesonet_synoptic",
+        /// `mesonet_other`.
+        MesonetOther => "mesonet_other",
+        /// `ndbc_buoy`.
+        NdbcBuoy => "ndbc_buoy",
+        /// `other`.
+        Other => "other",
+        /// `hads`.
+        Hads => "hads",
+        /// `madis`.
+        Madis => "madis",
+        /// `nwac`.
+        Nwac => "nwac",
+        /// `mt_mesonet`.
+        MtMesonet => "mt_mesonet",
+    }
+}
+
+string_enum! {
+    /// An observation station's live-feed status.
+    ///
+    /// ```
+    /// use ensemble_weather::StationStatus;
+    /// assert_eq!(StationStatus::from("active"), StationStatus::Active);
+    /// ```
+    pub enum StationStatus {
+        /// Active.
+        Active => "active",
+        /// Intermittent.
+        Intermittent => "intermittent",
+        /// Inactive.
+        Inactive => "inactive",
+        /// Decommissioned.
+        Decommissioned => "decommissioned",
+        /// The source says it is unknown (`"unknown"`); not to be confused
+        /// with [`StationStatus::Unknown`], a value this SDK does not know.
+        UnknownStatus => "unknown",
+    }
+}
+
+string_enum! {
+    /// A catalog page template variant.
+    ///
+    /// ```
+    /// use ensemble_weather::TemplateVariant;
+    /// assert_eq!(TemplateVariant::from("mountain"), TemplateVariant::Mountain);
+    /// ```
+    pub enum TemplateVariant {
+        /// Mountain.
+        Mountain => "mountain",
+        /// Coastal.
+        Coastal => "coastal",
+        /// Trail.
+        Trail => "trail",
+        /// Pass.
+        Pass => "pass",
+        /// Generic.
+        Generic => "generic",
+        /// Station.
+        Station => "station",
+    }
+}
+
+string_enum! {
+    /// Why the server could not answer a probability or a window total.
+    ///
+    /// ```
+    /// use ensemble_weather::NullReason;
+    /// assert_eq!(NullReason::from("window_not_covered"), NullReason::WindowNotCovered);
+    /// ```
+    pub enum NullReason {
+        /// The served series does not reach the window's end.
+        WindowNotCovered => "window_not_covered",
+        /// Fewer than two members cover the whole window.
+        TooFewMembers => "too_few_members",
+        /// No member carries the variable through the window (for example
+        /// with `hourly(false)`, which serves no members).
+        VariableUnavailable => "variable_unavailable",
     }
 }

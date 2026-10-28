@@ -18,7 +18,7 @@ async fn anonymous_forecast_with_probabilities_and_totals() {
         .total(Total::new(Variable::Precipitation).window(Window::hours(48)))
         .await
         .unwrap();
-    assert_eq!(f.location.slug, "mt-hood-meadows");
+    assert_eq!(f.location.slug.as_deref(), Some("mt-hood-meadows"));
     assert_eq!(f.probabilities.len(), 1);
     assert_eq!(f.window_totals.len(), 1);
     assert!(!f.forecast.timeseries.is_empty());
@@ -31,7 +31,7 @@ async fn keyed_calls_and_open_routes() {
     let hits = client.search("hood meadows").await.unwrap();
     assert!(hits.items.iter().any(|h| h.key == "or/mt-hood-meadows"));
     let current = client.current("or/mt-hood-meadows").await.unwrap();
-    assert_eq!(current.location.slug, "mt-hood-meadows");
+    assert_eq!(current.location.slug.as_deref(), Some("mt-hood-meadows"));
     let _ = client.alerts("or/mt-hood-meadows").await.unwrap();
     let _ = client.attribution().await.unwrap();
     let _ = client.runs().limit(1).await.unwrap();

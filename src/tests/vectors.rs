@@ -174,7 +174,7 @@ async fn run_call(client: &Client, call: &Value) -> Result<Result<Outcome, Error
                     &[
                         "location",
                         "state",
-                        "name",
+                        "slug",
                         "units",
                         "members",
                         "max_hours",
@@ -187,10 +187,10 @@ async fn run_call(client: &Client, call: &Value) -> Result<Result<Outcome, Error
                         "totals",
                     ],
                 )?;
-                match (text("location"), text("state"), text("name")) {
+                match (text("location"), text("state"), text("slug")) {
                     (Some(loc), None, None) => client.forecast(loc),
-                    (None, Some(state), Some(name)) => client.forecast((state, name)),
-                    _ => return Err("a location forecast needs location or state + name".into()),
+                    (None, Some(state), Some(slug)) => client.forecast((state, slug)),
+                    _ => return Err("a location forecast needs location or state + slug".into()),
                 }
             } else {
                 check_args(args, &["lat", "lon", "elevation_m", "max_hours"])?;
@@ -282,7 +282,7 @@ async fn run_call(client: &Client, call: &Value) -> Result<Result<Outcome, Error
                     .map(|items| Outcome {
                         value: Value::Null,
                         forecast: None,
-                        items: Some(items.into_iter().map(|l| l.location.slug).collect()),
+                        items: Some(items.into_iter().filter_map(|l| l.location.slug).collect()),
                     })
             } else {
                 client.catalog_locations().await.map(|r| Outcome {
@@ -357,7 +357,8 @@ fn check_result(expect: &Map<String, Value>, outcome: &Outcome) -> Result<(), Fa
                     "location.type" => outcome
                         .forecast
                         .as_ref()
-                        .map(|f| f.location.kind.is_unknown()),
+                        .and_then(|f| f.location.kind.as_ref())
+                        .map(crate::LocationType::is_unknown),
                     _ => None,
                 };
                 ensure!(

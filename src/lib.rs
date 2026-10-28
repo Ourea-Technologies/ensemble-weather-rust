@@ -47,7 +47,8 @@
 //! omitted) so requests share edge-cache entries; sends search, catalog
 //! details and attribution without the key for the same reason; follows
 //! same-host redirects and drops the key on any other host; retries
-//! connection errors, 429, 502, 503 and 504 with full-jitter backoff; and
+//! connection errors, 429, 502, 503 and 504 with full-jitter backoff
+//! (honouring `Retry-After` on 429, 503 and 504); and
 //! revalidates repeated requests with a local ETag cache.
 //!
 //! # Errors
@@ -91,19 +92,20 @@ pub use client::{
     ENV_API_KEY, ENV_BASE_URL, VERSION,
 };
 pub use enums::{
-    AdProvider, AdSlotKind, ClampedOption, Condition, CurrentSource, ElevationSource,
-    FreezingLevelKind, GapFlowStatus, InversionKind, LocationType, MembersView, MoonPhase,
-    NowcastSource, PrecipKind, Season, SectionKind, SourceKind, StormOrientation, WindStatus,
+    AlertCertainty, AlertSeverity, AlertUrgency, ClampedOption, Condition, ConditionIcon,
+    CurrentSource, ElevationSource, FreezingLevelKind, GapFlowStatus, InversionKind, LocationType,
+    MembersView, MoonPhase, NowcastSource, NullReason, PrecipKind, Season, SectionKind, SourceKind,
+    StationNetwork, StationStatus, StormOrientation, TemplateVariant, WindStatus,
 };
 pub use error::{
-    ApiError, Category, ConnectionError, ConnectionErrorKind, Error, ErrorCode, Result, UsageError,
+    ApiError, Category, ConnectionError, ConnectionErrorKind, Error, ErrorCode, NearestLocation,
+    Result, UsageError,
 };
 pub use meta::{Headers, RateLimit, ResponseMeta};
 pub use models::{
     Alerts, Attribution, CatalogLocationDetail, CatalogLocationPage, CatalogStationDetail,
     CatalogStationPage, Current, Forecast, Interval, LocationRef, LocationsPage, NearbyLocations,
-    NearbyPoint, ProbabilityResult, Quantiles, Runs, SearchResults, StormReport, StormReports,
-    WindowTotal,
+    NearbyPoint, ProbabilityResult, Quantiles, Runs, SearchResults, WindowTotal,
 };
 pub use paging::Items;
 pub use probability::{Aggregation, Chance, MAX_WINDOW_HOURS, Op, Total, Variable, Window};
@@ -111,7 +113,6 @@ pub use requests::{
     AlertsRequest, AttributionRequest, CatalogLocationRequest, CatalogLocationsRequest,
     CatalogStationRequest, CatalogStationsRequest, CurrentRequest, ForecastRequest, LocationKey,
     LocationsRequest, NearbyPointRequest, NearbyRequest, Point, RunsRequest, SearchRequest,
-    StormReportRequest, StormReportsRequest,
 };
 pub use transport::MAX_RESPONSE_BYTES;
 pub use units::{Threshold, Unit, Units};

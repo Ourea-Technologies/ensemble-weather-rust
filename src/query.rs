@@ -75,6 +75,15 @@ impl Query {
     }
 
     /// Sets an integer unless it is absent or the route's default.
+    /// A comma-joined list, sorted and de-duplicated (the server's canonical
+    /// form), unless it is empty.
+    pub(crate) fn sorted_list(&mut self, name: &'static str, values: &[String]) {
+        let mut values = values.to_vec();
+        values.sort();
+        values.dedup();
+        self.list(name, &values);
+    }
+
     pub(crate) fn int(&mut self, name: &'static str, value: Option<u32>, default: Option<u32>) {
         if let Some(v) = value.filter(|v| Some(*v) != default) {
             self.set(name, v.to_string());
@@ -110,8 +119,7 @@ impl Query {
     /// The query string, without the leading `?`.
     pub(crate) fn encode(&self) -> String {
         let mut params = self.params.clone();
-        params.sort_by(|a, b| a.name.cmp(b.name).then_with(|| a.value.cmp(&b.value)));
-        params.dedup();
+        params.sort_by(|a, b| a.name.cmp(b.name));
         params
             .iter()
             .map(|p| format!("{}={}", escape(p.name, b""), escape(&p.value, p.keep)))
@@ -148,12 +156,11 @@ mod tests {
         q.set("units", "imperial");
         q.int("max_hours", Some(24), Some(24));
         q.flag("nowcast", Some(false), true);
-        q.set("capability", "b");
-        q.set("capability", "a");
-        q.set("capability", "a");
-        assert_eq!(
-            q.encode(),
-            "capability=a&capability=b&nowcast=false&units=imperial"
+        q.sorted_list(
+            "capability",
+            &["b".to_owned(), "a".to_owned(), "a".to_owned()],
         );
+        q.sorted_list("network", &[]);
+        assert_eq!(q.encode(), "capability=a%2Cb&nowcast=false&units=imperial");
     }
 }

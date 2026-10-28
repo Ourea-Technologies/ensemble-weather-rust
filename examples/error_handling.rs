@@ -13,10 +13,11 @@ async fn main() -> Result<(), Error> {
         Err(e) if e.code() == Some(&ErrorCode::OutsideCoverage) => {
             let api = e.api_error().expect("an API error");
             println!(
-                "outside coverage: {} (status {}, request {})",
+                "outside coverage: {} (status {}, request {}; see {})",
                 api.message(),
                 api.status(),
-                api.request_id().unwrap_or("-")
+                api.request_id().unwrap_or("-"),
+                api.doc_url().unwrap_or("-")
             );
         }
         Err(Error::Permission(e)) => {

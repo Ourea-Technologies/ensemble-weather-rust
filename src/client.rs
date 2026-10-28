@@ -13,7 +13,9 @@ use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::cache::{Cache, CacheEntry, MemoryCache, cache_key, parse_cache_control};
-use crate::error::{ApiError, ConnectionError, ConnectionErrorKind, Error, ErrorCode, Result};
+use crate::error::{
+    ApiError, ConnectionError, ConnectionErrorKind, Error, ErrorCode, NearestLocation, Result,
+};
 use crate::meta::{Headers, RateLimit, ResponseMeta, WithMeta};
 use crate::query::{Query, escape};
 use crate::transport::{HttpRequest, HttpResponse, ReqwestTransport, Transport, TransportError};
@@ -504,6 +506,10 @@ struct ErrorBody {
     error: String,
     #[serde(default)]
     message: String,
+    request_id: Option<String>,
+    doc_url: Option<String>,
+    param: Option<String>,
+    nearest_location: Option<NearestLocation>,
 }
 
 fn is_redirect(status: u16) -> bool {
@@ -816,12 +822,24 @@ impl Client {
     }
 
     fn response_error(&self, op: &'static str, resp: &HttpResponse, key: Option<&str>) -> ApiError {
-        let (code, mut message) = match serde_json::from_slice::<ErrorBody>(&resp.body) {
-            Ok(body) if !body.error.is_empty() => (Some(ErrorCode::from(body.error)), body.message),
+        let header_id = resp.headers.get("X-Request-Id").map(str::to_owned);
+        let mut e = match serde_json::from_slice::<ErrorBody>(&resp.body) {
+            Ok(body) if !body.error.is_empty() => ApiError {
+                code: Some(ErrorCode::from(body.error)),
+                message: body.message,
+                request_id: body.request_id.or(header_id),
+                doc_url: body.doc_url,
+                param: body.param,
+                nearest_location: body.nearest_location,
+                ..ApiError::bare(op, resp.status, "")
+            },
             _ => {
                 let text = String::from_utf8_lossy(&resp.body);
                 let text: String = text.trim().chars().take(200).collect();
-                (None, text)
+                ApiError {
+                    request_id: header_id,
+                    ..ApiError::bare(op, resp.status, &text)
+                }
             }
         };
         // Never echo a credential back, wherever it came from.
@@ -829,24 +847,17 @@ impl Client {
             .into_iter()
             .flatten()
         {
-            message = message.replace(secret, "[redacted]");
+            e.message = e.message.replace(secret, "[redacted]");
         }
-        let retry_after = if matches!(resp.status, 429 | 503) {
-            resp.headers
+        // The API sends Retry-After on every 503 and 504 (BEHAVIOR 9).
+        if matches!(resp.status, 429 | 503 | 504) {
+            e.retry_after = resp
+                .headers
                 .get("Retry-After")
-                .and_then(|v| parse_retry_after(v, SystemTime::now()))
-        } else {
-            None
-        };
-        ApiError {
-            operation: op,
-            status: resp.status,
-            code,
-            message,
-            request_id: resp.headers.get("X-Request-Id").map(str::to_owned),
-            retry_after,
-            rate_limit: RateLimit::from_headers(&resp.headers),
+                .and_then(|v| parse_retry_after(v, SystemTime::now()));
         }
+        e.rate_limit = RateLimit::from_headers(&resp.headers);
+        e
     }
 
     fn warn_deprecation(&self, op: &'static str, headers: &Headers) {
@@ -880,6 +891,9 @@ impl ApiError {
             code: None,
             message: message.to_owned(),
             request_id: None,
+            doc_url: None,
+            param: None,
+            nearest_location: None,
             retry_after: None,
             rate_limit: None,
         }

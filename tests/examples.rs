@@ -87,7 +87,7 @@ async fn every_example_runs_against_the_stub() {
         (
             "current_and_alerts",
             None,
-            &["Snow", "1 alert(s)", "Winter Storm Warning"],
+            &["Snow", "1 alert(s)", "Winter Storm Warning [severe]"],
         ),
         (
             "error_handling",
@@ -102,7 +102,7 @@ async fn every_example_runs_against_the_stub() {
             Some("ow_stub_pro"),
             &[
                 "outside coverage:",
-                "request stub-request",
+                "status 404, request stub-request; see https://docs.oureawx.com/features/errors/#outside_coverage",
                 "rate limit: 599 of 600 left, resets in 60 s (policy 600;w=60)",
             ],
         ),
@@ -159,7 +159,7 @@ fn the_blocking_client_works_end_to_end() {
     let slugs: Vec<String> = client
         .catalog_locations()
         .items()
-        .map(|r| r.map(|l| l.location.slug))
+        .map(|r| r.map(|l| l.location.slug.unwrap_or_default()))
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(slugs, ["mt-hood-meadows", "timberline-lodge"]);

@@ -129,9 +129,14 @@ async fn handle(mut sock: TcpStream) {
 type Reply = (u16, Vec<(String, String)>, Vec<u8>);
 
 fn error(status: u16, code: &str, message: &str) -> Reply {
-    let body = json!({"error": code, "message": message})
-        .to_string()
-        .into_bytes();
+    let body = json!({
+        "error": code,
+        "message": message,
+        "request_id": "stub-request",
+        "doc_url": format!("https://docs.oureawx.com/features/errors/#{}", code.to_ascii_lowercase()),
+    })
+    .to_string()
+    .into_bytes();
     (
         status,
         vec![("X-Request-Id".into(), "stub-request".into())],
@@ -155,7 +160,7 @@ fn route(req: &Request) -> Reply {
             let lon: f64 = req.query("lon").and_then(|v| v.parse().ok()).unwrap_or(0.0);
             if lon > -60.0 || lat < 20.0 {
                 return error(
-                    400,
+                    404,
                     "OUTSIDE_COVERAGE",
                     &format!("{lat},{lon} is outside the forecast domain (CONUS)."),
                 );
@@ -242,11 +247,12 @@ fn forecast(req: &Request) -> Option<Value> {
                     "any"
                 };
                 json!({
+                    "term": term,
                     "variable": p[0], "op": p[1], "threshold": p[2].parse::<f64>().unwrap_or(0.0),
                     "aggregation": p.get(4).copied().unwrap_or(default),
                     "window_start_hours": start, "window_end_hours": end,
                     "from": hour(start), "to": hour(end),
-                    "probability": PROBABILITIES[i % 4], "members": 131
+                    "probability": PROBABILITIES[i % 4], "members": 131, "null_reason": null
                 })
             })
             .collect();
@@ -259,10 +265,12 @@ fn forecast(req: &Request) -> Option<Value> {
                 let (variable, w) = term.split_once(':').unwrap_or((term, "24h"));
                 let (start, end) = window(w);
                 json!({
+                    "term": term,
                     "variable": variable, "window_start_hours": start, "window_end_hours": end,
+                    "aggregation": "total",
                     "from": hour(start), "to": hour(end),
                     "quantiles": {"mean": 31.0, "p10": 12.0, "p25": 20.0, "p50": 29.0, "p75": 40.0, "p90": 52.0, "min": 4.0, "max": 88.0},
-                    "members": 131
+                    "members": 131, "null_reason": null
                 })
             })
             .collect();

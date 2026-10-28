@@ -112,8 +112,9 @@ let f = client
             .aggregation(Aggregation::All),
     )
     .await?;
-// f.probabilities[i] answers the i-th chance; `probability` is None (never 0)
-// when the forecast does not reach the window.
+// f.probabilities[i] answers the i-th chance (matched by the term the server
+// echoes, never by position); `probability` is None (never 0) when the server
+// cannot answer, with the reason in `null_reason`.
 ```
 
 **A window total**, the distribution of each member's own total:
@@ -193,7 +194,10 @@ Every call returns `Result<T, ensemble_weather::Error>`. `Error` has one
 variant per category: `Authentication`, `Permission`, `NotFound`,
 `InvalidRequest`, `OutsideCoverage`, `RateLimited`, `Unavailable` (each with
 an `ApiError`: `status()`, `code()` kept verbatim, `message()`,
-`request_id()`, `retry_after()`), `Connection` (no response) and `Usage`
+`request_id()`, `doc_url()` (the code's page in the API docs), `param()` (the
+parameter a 400 is about), `nearest_location()` (on a `PRO_REQUIRED` from a
+coordinate route, a nearby location that needs no key), `retry_after()`),
+`Connection` (no response) and `Usage`
 (refused before sending, such as an invalid `Chance`).
 
 ```rust
@@ -207,7 +211,7 @@ match client.forecast_at(Point::new(45.0, 10.0)).await {
 
 Connection errors (except TLS verification failures), 429, 502, 503 and 504
 are retried twice by default (`.max_retries(n)`), with full-jitter backoff; a
-429 or 503 `Retry-After` is honoured exactly when it is 60 s or less, and
+429, 503 or 504 `Retry-After` is honoured exactly when it is 60 s or less, and
 returned in `retry_after()` when it is longer. Nothing else is retried. Each
 attempt times out after 30 s (`.timeout(..)`).
 

@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::enums::{AdProvider, AdSlotKind, SectionKind};
+use crate::enums::{LocationType, SectionKind, StationNetwork, StationStatus, TemplateVariant};
 use crate::meta::{ResponseMeta, with_meta};
 use crate::models::LocationRef;
 
@@ -102,9 +102,6 @@ pub struct CatalogLocationDetail {
     /// Content entries (with `include` `"content"`).
     #[serde(default)]
     pub content: Vec<CatalogContentEntry>,
-    /// Ad slots (with `include` `"ads"`).
-    #[serde(default)]
-    pub ads: Vec<CatalogAdSlot>,
 }
 
 /// An observation station's catalog record.
@@ -121,8 +118,8 @@ pub struct CatalogStation {
     /// Other names.
     #[serde(default)]
     pub aliases: Vec<String>,
-    /// The network, such as `"Snotel"`.
-    pub network: Option<String>,
+    /// The network, such as [`StationNetwork::Snotel`].
+    pub network: Option<StationNetwork>,
     /// The network's own station ID.
     pub source_station_id: Option<String>,
     /// The elevation above mean sea level, m.
@@ -132,8 +129,8 @@ pub struct CatalogStation {
     /// What the station measures.
     #[serde(default)]
     pub sensor_capabilities: Vec<String>,
-    /// The status, such as `"Active"`.
-    pub station_status: Option<String>,
+    /// The live-feed status, such as [`StationStatus::Active`].
+    pub station_status: Option<StationStatus>,
     /// The last report's time (RFC 3339).
     pub last_report_at: Option<String>,
     /// The last report, as the API sends it.
@@ -187,9 +184,6 @@ pub struct CatalogStationDetail {
     /// Content entries (with `include` `"content"`).
     #[serde(default)]
     pub content: Vec<CatalogContentEntry>,
-    /// Ad slots (with `include` `"ads"`).
-    #[serde(default)]
-    pub ads: Vec<CatalogAdSlot>,
 }
 
 /// The location a station primarily serves.
@@ -270,9 +264,9 @@ pub struct CatalogNearbyStation {
     /// The name.
     pub name: String,
     /// The network.
-    pub network: String,
-    /// The status.
-    pub station_status: String,
+    pub network: StationNetwork,
+    /// The live-feed status.
+    pub station_status: StationStatus,
     /// The distance, km.
     pub distance_km: Option<f64>,
     /// The elevation difference, m.
@@ -288,9 +282,9 @@ pub struct CatalogTemplate {
     /// The template's ID.
     pub id: String,
     /// The location type it is for.
-    pub location_type: Option<String>,
+    pub location_type: Option<LocationType>,
     /// The template variant.
-    pub template_variant: Option<String>,
+    pub template_variant: Option<TemplateVariant>,
     /// The sections, in order.
     #[serde(default)]
     pub spec: Vec<TemplateSection>,
@@ -328,63 +322,6 @@ pub struct CatalogContentEntry {
     pub resolved_locale: String,
     /// When it last changed (RFC 3339).
     pub updated_at: String,
-}
-
-/// One resolved ad slot of a catalog record.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct CatalogAdSlot {
-    /// The slot's key.
-    pub slot_key: String,
-    /// House or third party.
-    pub kind: AdSlotKind,
-    /// The house ad, for [`AdSlotKind::House`].
-    pub house: Option<HousePlacement>,
-    /// The third-party unit, for [`AdSlotKind::ThirdParty`].
-    pub third_party: Option<ThirdPartyPlacement>,
-    /// The sizes, as `[width, height]` pairs.
-    #[serde(default)]
-    pub sizes: Vec<Vec<u32>>,
-}
-
-/// A house ad in a slot.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct HousePlacement {
-    /// The campaign's ID.
-    pub campaign_id: String,
-    /// The creative's ID.
-    pub creative_id: String,
-    /// The creative.
-    pub content: AdCreative,
-}
-
-/// A house ad's content.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct AdCreative {
-    /// The headline.
-    pub headline: Option<String>,
-    /// The body.
-    pub body: Option<String>,
-    /// The call to action.
-    pub cta: Option<String>,
-    /// Where a click goes.
-    pub click_url: Option<String>,
-    /// The photo's ID.
-    pub photo_id: Option<String>,
-}
-
-/// A third-party ad unit in a slot.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub struct ThirdPartyPlacement {
-    /// The unit's ID.
-    pub unit_id: String,
-    /// The provider.
-    pub provider: AdProvider,
-    /// Its configuration, as the API sends it.
-    pub config: Value,
 }
 
 with_meta!(

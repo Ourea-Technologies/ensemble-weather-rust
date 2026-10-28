@@ -10,13 +10,12 @@ use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 
 use crate::client::{Client, Operation};
-use crate::enums::LocationType;
+use crate::enums::{LocationType, StationNetwork, StationStatus, TemplateVariant};
 use crate::error::{Error, Result};
 use crate::models::{
     Alerts, Attribution, CatalogLocation, CatalogLocationDetail, CatalogLocationPage,
     CatalogStation, CatalogStationDetail, CatalogStationPage, Current, Forecast, LocationRef,
-    LocationSummary, LocationsPage, NearbyLocations, NearbyPoint, Runs, SearchResults, StormReport,
-    StormReports,
+    LocationSummary, LocationsPage, NearbyLocations, NearbyPoint, Runs, SearchResults,
 };
 use crate::paging::Items;
 use crate::probability::{Chance, Total, build_chances, build_totals, map_chances, map_totals};
@@ -50,8 +49,6 @@ pub(crate) mod ops {
     pub(crate) const CATALOG_STATIONS: Operation = keyed("listCatalogStations");
     pub(crate) const CATALOG_STATION: Operation = open("getCatalogStation");
     pub(crate) const RUNS: Operation = keyed("getAvailableRuns");
-    pub(crate) const STORM_REPORTS: Operation = keyed("getStormReports");
-    pub(crate) const STORM_REPORT: Operation = keyed("getStormReport");
     pub(crate) const ATTRIBUTION: Operation = open("getAttribution");
 
     /// For the spec-drift test.
@@ -73,8 +70,6 @@ pub(crate) mod ops {
         CATALOG_STATIONS,
         CATALOG_STATION,
         RUNS,
-        STORM_REPORTS,
-        STORM_REPORT,
         ATTRIBUTION,
     ];
 }
@@ -153,7 +148,8 @@ impl<S: Into<String>, T: Into<String>> From<(S, T)> for LocationKey {
 
 impl From<&LocationRef> for LocationKey {
     fn from(l: &LocationRef) -> Self {
-        Self::new(l.state.clone(), l.slug.clone())
+        // A coordinate request's point has no slug: the call is then a usage error.
+        Self::new(l.state.clone(), l.slug.clone().unwrap_or_default())
     }
 }
 
@@ -317,6 +313,7 @@ pub(crate) struct ForecastParams {
     chances: Vec<Chance>,
     totals: Vec<Total>,
     diagnostics: Vec<String>,
+    include: Vec<String>,
     feels_like: Vec<String>,
 }
 
@@ -458,13 +455,20 @@ impl<C> ForecastRequest<'_, C> {
         self
     }
 
-    /// Opts in to serve-path diagnostics, such as `"provenance"`.
+    /// Opts in to serve-path diagnostics: `"provenance"`.
     pub fn diagnostics<I: IntoIterator<Item = S>, S: Into<String>>(mut self, names: I) -> Self {
         self.params.diagnostics = strings(names);
         self
     }
 
-    /// Selects the feels-like indices (default `["nws"]`).
+    /// Opts in to extra forecast variables: `"mslp"` and `"skin_temperature"`
+    /// (`ensemble.mslp`, `ensemble.skin_temperature`).
+    pub fn include<I: IntoIterator<Item = S>, S: Into<String>>(mut self, variables: I) -> Self {
+        self.params.include = strings(variables);
+        self
+    }
+
+    /// Selects the feels-like indices (default `["nws"]`, the only one).
     pub fn feels_like<I: IntoIterator<Item = S>, S: Into<String>>(mut self, indices: I) -> Self {
         self.params.feels_like = strings(indices);
         self
@@ -701,7 +705,7 @@ pub(crate) struct LocationsParams {
 /// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
 /// let mut all = client.locations().state("or").limit(500).items();
 /// while let Some(location) = all.try_next().await? {
-///     println!("{}", location.location.key());
+///     println!("{} ({:?})", location.location.name, location.location.slug);
 /// }
 /// # Ok(()) }
 /// ```
@@ -753,8 +757,8 @@ pageable!(LocationsRequest => LocationSummary, page_locations);
 pub(crate) struct CatalogLocationsParams {
     admin1: Option<String>,
     country: Option<String>,
-    kind: Option<String>,
-    template: Option<String>,
+    kind: Option<LocationType>,
+    template: Option<TemplateVariant>,
     limit: Option<u32>,
     cursor: Option<String>,
 }
@@ -788,14 +792,14 @@ impl<C> CatalogLocationsRequest<'_, C> {
         self
     }
 
-    /// A catalog location type, such as `"SkiArea"`.
-    pub fn kind(mut self, kind: impl Into<String>) -> Self {
+    /// A location type, such as [`LocationType::SkiArea`].
+    pub fn kind(mut self, kind: impl Into<LocationType>) -> Self {
         self.params.kind = Some(kind.into());
         self
     }
 
-    /// A template variant, such as `"Mountain"`.
-    pub fn template(mut self, variant: impl Into<String>) -> Self {
+    /// A template variant, such as [`TemplateVariant::Mountain`].
+    pub fn template(mut self, variant: impl Into<TemplateVariant>) -> Self {
         self.params.template = Some(variant.into());
         self
     }
@@ -820,9 +824,9 @@ pageable!(CatalogLocationsRequest => CatalogLocation, page_catalog_locations);
 pub(crate) struct CatalogStationsParams {
     admin1: Option<String>,
     country: Option<String>,
-    networks: Vec<String>,
+    networks: Vec<StationNetwork>,
     capabilities: Vec<String>,
-    status: Option<String>,
+    status: Option<StationStatus>,
     limit: Option<u32>,
     cursor: Option<String>,
 }
@@ -832,7 +836,13 @@ pub(crate) struct CatalogStationsParams {
 ///
 /// ```no_run
 /// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
-/// let page = client.catalog_stations().networks(["Snotel"]).capabilities(["snow_depth"]).await?;
+/// use ensemble_weather::{StationNetwork, StationStatus};
+/// let page = client
+///     .catalog_stations()
+///     .networks([StationNetwork::Snotel])
+///     .status(StationStatus::Active)
+///     .capabilities(["snow_depth"])
+///     .await?;
 /// # let _ = page;
 /// # Ok(()) }
 /// ```
@@ -856,9 +866,12 @@ impl<C> CatalogStationsRequest<'_, C> {
         self
     }
 
-    /// Filters by network, such as `"Snotel"`.
-    pub fn networks<I: IntoIterator<Item = S>, S: Into<String>>(mut self, networks: I) -> Self {
-        self.params.networks = strings(networks);
+    /// Filters by network, such as [`StationNetwork::Snotel`] (any of them).
+    pub fn networks<I: IntoIterator<Item = S>, S: Into<StationNetwork>>(
+        mut self,
+        networks: I,
+    ) -> Self {
+        self.params.networks = networks.into_iter().map(Into::into).collect();
         self
     }
 
@@ -871,8 +884,8 @@ impl<C> CatalogStationsRequest<'_, C> {
         self
     }
 
-    /// A station status, such as `"Active"`.
-    pub fn status(mut self, status: impl Into<String>) -> Self {
+    /// A live-feed status, such as [`StationStatus::Active`].
+    pub fn status(mut self, status: impl Into<StationStatus>) -> Self {
         self.params.status = Some(status.into());
         self
     }
@@ -935,7 +948,7 @@ pub struct CatalogStationRequest<'a, C = Client> {
 macro_rules! detail_setters {
     ($req:ident) => {
         impl<C> $req<'_, C> {
-            /// Opts in to extras: `"content"`, `"template"` and `"ads"`.
+            /// Opts in to extras: `"content"` and `"template"`.
             pub fn include<I: IntoIterator<Item = S>, S: Into<String>>(
                 mut self,
                 extras: I,
@@ -957,7 +970,7 @@ detail_setters!(CatalogStationRequest);
 sendable!(CatalogLocationRequest => CatalogLocationDetail, exec_catalog_location);
 sendable!(CatalogStationRequest => CatalogStationDetail, exec_catalog_station);
 
-// ----------------------------------------------- runs, reports, attribution
+// ------------------------------------------------------ runs, attribution
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LimitParams {
@@ -979,21 +992,6 @@ pub struct RunsRequest<'a, C = Client> {
     params: LimitParams,
 }
 
-/// A storm-reports request, from [`Client::storm_reports`].
-///
-/// ```no_run
-/// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
-/// let reports = client.storm_reports().limit(5).await?;
-/// # let _ = reports;
-/// # Ok(()) }
-/// ```
-#[derive(Debug, Clone)]
-#[must_use = "a request does nothing until it is awaited or sent"]
-pub struct StormReportsRequest<'a, C = Client> {
-    client: &'a C,
-    params: LimitParams,
-}
-
 macro_rules! limit_setter {
     ($req:ident, $max:literal, $default:literal) => {
         impl<C> $req<'_, C> {
@@ -1006,31 +1004,7 @@ macro_rules! limit_setter {
     };
 }
 limit_setter!(RunsRequest, 100, 10);
-limit_setter!(StormReportsRequest, 100, 20);
 sendable!(RunsRequest => Runs, exec_runs);
-sendable!(StormReportsRequest => StormReports, exec_storm_reports);
-
-#[derive(Debug, Clone)]
-pub(crate) struct IdParams {
-    id: i64,
-}
-
-/// A storm-report request, from [`Client::storm_report`].
-///
-/// ```no_run
-/// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
-/// let report = client.storm_report(42).await?;
-/// # let _ = report;
-/// # Ok(()) }
-/// ```
-#[derive(Debug, Clone)]
-#[must_use = "a request does nothing until it is awaited or sent"]
-pub struct StormReportRequest<'a, C = Client> {
-    client: &'a C,
-    params: IdParams,
-}
-
-sendable!(StormReportRequest => StormReport, exec_storm_report);
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct NoParams;
@@ -1075,6 +1049,7 @@ fn forecast_params(target: Target) -> ForecastParams {
         chances: Vec::new(),
         totals: Vec::new(),
         diagnostics: Vec::new(),
+        include: Vec::new(),
         feels_like: Vec::new(),
     }
 }
@@ -1255,22 +1230,6 @@ macro_rules! constructors {
                 }
             }
 
-            /// Recent storm verification reports.
-            pub fn storm_reports(&self) -> StormReportsRequest<'_, Self> {
-                StormReportsRequest {
-                    client: self,
-                    params: LimitParams::default(),
-                }
-            }
-
-            /// One storm verification report.
-            pub fn storm_report(&self, id: i64) -> StormReportRequest<'_, Self> {
-                StormReportRequest {
-                    client: self,
-                    params: IdParams { id },
-                }
-            }
-
             /// Every data source with its licence, terms and required
             /// notices. Sent without the API key.
             pub fn attribution(&self) -> AttributionRequest<'_, Self> {
@@ -1328,6 +1287,7 @@ impl Client {
         q.literal("prob", chances.value.as_deref());
         q.literal("totals", totals.value.as_deref());
         q.list("diagnostics", &p.diagnostics);
+        q.sorted_list("include", &p.include);
         if p.feels_like != ["nws"] {
             q.list("feels_like", &p.feels_like);
         }
@@ -1482,8 +1442,8 @@ impl Client {
         let mut q = Query::default();
         q.opt("admin1", p.admin1.as_deref());
         q.opt("country", p.country.as_deref());
-        q.opt("type", p.kind.as_deref());
-        q.opt("template", p.template.as_deref());
+        q.opt("type", p.kind.as_ref().map(LocationType::as_str));
+        q.opt("template", p.template.as_ref().map(TemplateVariant::as_str));
         q.int("limit", p.limit, Some(20));
         q.opt("cursor", p.cursor.as_deref());
         self.get(ops::CATALOG_LOCATIONS, &["catalog", "locations"], &q)
@@ -1505,11 +1465,10 @@ impl Client {
         let mut q = Query::default();
         q.opt("admin1", p.admin1.as_deref());
         q.opt("country", p.country.as_deref());
-        q.list("network", &p.networks);
-        for capability in &p.capabilities {
-            q.opt("capability", Some(capability)); // the one repeated parameter
-        }
-        q.opt("status", p.status.as_deref());
+        let networks: Vec<String> = p.networks.iter().map(|n| n.as_str().to_owned()).collect();
+        q.sorted_list("network", &networks);
+        q.sorted_list("capability", &p.capabilities);
+        q.opt("status", p.status.as_ref().map(StationStatus::as_str));
         q.int("limit", p.limit, Some(20));
         q.opt("cursor", p.cursor.as_deref());
         self.get(ops::CATALOG_STATIONS, &["catalog", "stations"], &q)
@@ -1559,21 +1518,6 @@ impl Client {
         let mut q = Query::default();
         q.int("limit", p.limit, Some(10));
         self.get(ops::RUNS, &["runs"], &q).await
-    }
-
-    pub(crate) async fn exec_storm_reports(&self, p: LimitParams) -> Result<StormReports> {
-        let mut q = Query::default();
-        q.int("limit", p.limit, Some(20));
-        self.get(ops::STORM_REPORTS, &["storm-reports"], &q).await
-    }
-
-    pub(crate) async fn exec_storm_report(&self, p: IdParams) -> Result<StormReport> {
-        self.get(
-            ops::STORM_REPORT,
-            &["storm-reports", &p.id.to_string()],
-            &Query::default(),
-        )
-        .await
     }
 
     pub(crate) async fn exec_attribution(&self, _: NoParams) -> Result<Attribution> {

@@ -10,6 +10,59 @@ change ("Thanks @handle"). Thank you, all of you.
 
 ## [Unreleased]
 
+Moves to the v1 contract as deployed (ensemble-weather-spec 8b85fea, the
+server's public spec byte for byte). Breaking, as 0.x allows.
+
+### Changed
+
+- `precip_*` fields are `precipitation_*`: `DailyForecast::total_precipitation`,
+  `total_precipitation_if_wet`, `precipitation_probability`,
+  `precipitation_occurrence_probability`, `precipitation_type`,
+  `precipitation_display`; `TimeSeriesPoint::precipitation_type`;
+  `CurrentConditions::precipitation_probability`;
+  `SensorObservation::precipitation_rate`; and
+  `ProbabilityThresholds::daily_precipitation_probability` /
+  `daily_precipitation_occurrence_probability`.
+- `EnsembleStats::wind_direction` and `ModelMean::wind_direction` are
+  `CircularStats` (mean, stddev, 50 % and 90 % sectors), not `Quantiles`.
+- Probabilities and window totals are matched to the caller's terms by the
+  `term` the server echoes, never by position. `ProbabilityResult` and
+  `WindowTotal` carry `term` and `null_reason`; `WindowTotal` carries
+  `aggregation` (new `Aggregation::Min` / `Max`, refused in a `Chance`).
+- `ErrorCode` is the public spec's 16 codes: `AuthUnavailable`
+  (unavailable) is new; `Forbidden`, `ModelRunNotFound`, `Gone`,
+  `InvalidMaxHours`, `Ambiguous` and `FeelsLikeUnavailable` are gone (an old
+  code still parses to `Unknown` and maps by status). `OUTSIDE_COVERAGE` is
+  a 404. `Retry-After` is honoured on 504 as well as 429 and 503.
+- Typed snake_case enums: `ActiveAlert::severity` / `urgency`
+  (`AlertSeverity`, `AlertUrgency`), the catalog's `StationNetwork`,
+  `StationStatus` and `TemplateVariant`, and `condition_icon`
+  (`ConditionIcon`). The catalog filters take them: `kind`, `template`,
+  `networks`, `status`. `network` and `capability` are sent as one sorted,
+  de-duplicated comma list (the server's canonical form); `capability` is
+  no longer repeated.
+- `LocationRef::slug` and `kind` are `Option`: `None` for a coordinate
+  forecast that matched no named location. `LocationRef::key()` returns
+  `Option<String>`.
+
+### Added
+
+- `ActiveAlert::certainty`, `CurrentStation::station_id`,
+  `Runs::next_cursor`, `ForecastRequest::include` (`mslp`,
+  `skin_temperature`), `NullReason`, and on `ApiError` `doc_url()`,
+  `param()` and `nearest_location()` (`NearestLocation`); `request_id()` is
+  read from the body's `request_id` first.
+- The drift test also fails on any model field the spec does not have.
+
+### Removed
+
+- `storm_reports`, `storm_report` and their models (not in the public spec).
+- Catalog ads (`CatalogAdSlot`, its placements, `AdSlotKind`, `AdProvider`;
+  `include("ads")`).
+- `EnsembleStats::feels_like_utci`, `ptype` and `wind_direction_circular`;
+  `DailyForecast::feels_like_utci_high` / `low`;
+  `ElevationForecast::default` and `timeseries` (`ElevationHour`).
+
 ## [0.1.0] - 2026-10-26
 
 ### Added

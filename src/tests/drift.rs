@@ -6,7 +6,7 @@
 //!   field;
 //! - for every operation, a response synthesised with every property of every
 //!   schema it reaches decodes, and no property is dropped: a property the
-//!   models lack fails here.
+//!   models lack fails here, and so does a model field the spec lacks.
 
 use std::collections::BTreeSet;
 
@@ -17,26 +17,15 @@ use crate::requests::ops;
 use crate::{
     Alerts, Attribution, CatalogLocationDetail, CatalogLocationPage, CatalogStationDetail,
     CatalogStationPage, Current, Forecast, LocationsPage, NearbyLocations, NearbyPoint, Runs,
-    SearchResults, StormReport, StormReports,
+    SearchResults,
 };
 
 const OUT_OF_SCOPE: &[&str] = &["getMapsToken"];
 
 /// Response examples the pinned spec gets wrong, reported upstream. Each must
-/// still fail to decode, so this list is emptied when the spec is fixed.
-///
-/// All three forecast examples are abridged and invalid against their own
-/// schema: `location` still has the retired `LocationInfo` shape (no `slug`,
-/// `state`, `elevation_m` or `timezone`; `"type": "skiArea"` / `"cityTown"`
-/// instead of snake_case), `attribution` is missing, `dailyOnly`'s daily rows
-/// lack `condition_text`, `high`, `low`, `total_precip` and more, `plumes`'
-/// hours lack `ensemble` and `condition`, and `point` lacks `model_run`,
-/// `units` and `forecast`. The `point` block of `point` is checked on its own.
-const KNOWN_SPEC_DEFECTS: &[(&str, &str)] = &[
-    ("getLocationForecast", "dailyOnly"),
-    ("getLocationForecast", "plumes"),
-    ("getPointForecast", "point"),
-];
+/// still fail to decode, so this list is emptied when the spec is fixed. The
+/// pinned spec has none.
+const KNOWN_SPEC_DEFECTS: &[(&str, &str)] = &[];
 
 fn spec() -> Value {
     let text = include_str!("../../spec/openapi/v1/openapi.yaml");
@@ -87,8 +76,6 @@ fn round_trip(operation: &str, v: Value) -> Result<Value, String> {
         "listCatalogStations" => rt::<CatalogStationPage>(v),
         "getCatalogStation" => rt::<CatalogStationDetail>(v),
         "getAvailableRuns" => rt::<Runs>(v),
-        "getStormReports" => rt::<StormReports>(v),
-        "getStormReport" => rt::<StormReport>(v),
         "getAttribution" => rt::<Attribution>(v),
         other => Err(format!("no model for {other}")),
     }
@@ -311,5 +298,13 @@ fn the_models_have_every_property_of_every_reachable_schema() {
         let mut missing = Vec::new();
         missing_keys(&full, &decoded, &id, &mut missing);
         assert!(missing.is_empty(), "{id}: the models lack {missing:?}");
+        // And the reverse: a model field the spec does not have (a renamed or
+        // withdrawn one) fails too.
+        let mut extra = Vec::new();
+        missing_keys(&decoded, &full, &id, &mut extra);
+        assert!(
+            extra.is_empty(),
+            "{id}: the models have fields the spec lacks: {extra:?}"
+        );
     }
 }

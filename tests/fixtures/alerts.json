@@ -1,4 +1,4 @@
 {"location":{"slug":"mt-hood-meadows","state":"or","name":"Mt. Hood Meadows","lat":45.3311,"lon":-121.6649,"elevation_m":1661.0,"type":"ski_area","timezone":"America/Los_Angeles"},
  "alert_count":1,"as_of":"2026-11-15T00:00:00Z",
- "alerts":[{"id":"urn:oid:2.49.0.1.840.0.test","event":"Winter Storm Warning","severity":"Severe","urgency":"Expected","headline":"Winter Storm Warning until Monday 4:00 AM PST","onset":"2026-11-15T00:00:00Z","expires":"2026-11-16T12:00:00Z"}],
+ "alerts":[{"id":"urn:oid:2.49.0.1.840.0.test","event":"Winter Storm Warning","severity":"severe","urgency":"expected","certainty":"likely","headline":"Winter Storm Warning until Monday 4:00 AM PST","onset":"2026-11-15T00:00:00Z","expires":"2026-11-16T12:00:00Z"}],
  "attribution":{"sources":["nws-alerts"],"credit":"Alerts from the US National Weather Service.","url":"https://oureawx.com/attribution"}}
