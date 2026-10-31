@@ -41,15 +41,15 @@ async fn every_operation_sends_its_canonical_url() {
         .include_nowcast_hours(true)
         .units(Units::Imperial)
         .await;
-    let _ = c.current_at(p.elevation_m(1500.0)).await;
+    let _ = c.get_point_current(p.elevation_m(1500.0)).await;
     let _ = c.alerts("OR/mt-hood-meadows").await;
-    let _ = c.alerts_at(p).await;
+    let _ = c.get_point_alerts(p).await;
     let _ = c
         .nearby("or/mt-hood-meadows")
         .limit(3)
         .radius_km(50.0)
         .await;
-    let _ = c.nearby_at(p).limit(5).radius_km(25.5).await;
+    let _ = c.get_point_nearby(p).limit(5).radius_km(25.5).await;
     let _ = c
         .search("hood")
         .state("or")
@@ -98,7 +98,7 @@ async fn every_operation_sends_its_canonical_url() {
         .max_days(7)
         .await;
     let _ = c
-        .forecast_at(Point::new(45.3311, -121.6649).elevation_m(1661.0))
+        .get_point_forecast(Point::new(45.3311, -121.6649).elevation_m(1661.0))
         .include(["skin_temperature", "mslp", "mslp"])
         .await;
     let base = "https://api.example.test/api/v1";
@@ -149,14 +149,14 @@ async fn usage_errors_are_raised_before_sending() {
     let cases: Vec<Error> = vec![
         c.forecast("no-slash").await.unwrap_err(),
         c.forecast("a/b/c").await.unwrap_err(),
-        c.forecast_at(Point::new(45.0, -121.0))
+        c.get_point_forecast(Point::new(45.0, -121.0))
             .elevations(["all"])
             .await
             .unwrap_err(),
-        c.alerts_at(Point::new(45.0, -121.0).elevation_m(10.0))
+        c.get_point_alerts(Point::new(45.0, -121.0).elevation_m(10.0))
             .await
             .unwrap_err(),
-        c.nearby_at(Point::new(45.0, -121.0).elevation_m(10.0))
+        c.get_point_nearby(Point::new(45.0, -121.0).elevation_m(10.0))
             .await
             .unwrap_err(),
         c.forecast("or/x")
@@ -240,7 +240,10 @@ async fn error_bodies_carry_request_id_doc_url_param_and_nearest_location() {
             "nearest_location":{"slug":"mt-hood-meadows","url":"/api/v1/locations/or/mt-hood-meadows",
             "distance_km":4.25,"elevation_m":1635.6}}"#,
     );
-    let err = c.forecast_at(Point::new(45.33, -121.67)).await.unwrap_err();
+    let err = c
+        .get_point_forecast(Point::new(45.33, -121.67))
+        .await
+        .unwrap_err();
     let api = err.api_error().unwrap();
     assert_eq!(api.code(), Some(&ErrorCode::ProRequired));
     assert_eq!(api.request_id(), Some("body-id"));

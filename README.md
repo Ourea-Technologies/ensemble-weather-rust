@@ -201,7 +201,7 @@ coordinate route, a nearby location that needs no key), `retry_after()`),
 (refused before sending, such as an invalid `Chance`).
 
 ```rust
-match client.forecast_at(Point::new(45.0, 10.0)).await {
+match client.get_point_forecast(Point::new(45.0, 10.0)).await {
     Err(e) if e.code() == Some(&ErrorCode::OutsideCoverage) => println!("outside the forecast domain"),
     Err(Error::RateLimited(e)) => println!("retry after {:?}", e.retry_after()),
     Err(e) => return Err(e),

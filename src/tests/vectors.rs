@@ -199,7 +199,7 @@ async fn run_call(client: &Client, call: &Value) -> Result<Result<Outcome, Error
                 if let Some(e) = float("elevation_m") {
                     p = p.elevation_m(e);
                 }
-                client.forecast_at(p)
+                client.get_point_forecast(p)
             };
             if let Some(u) = text("units") {
                 req = req.units(Units::from(u));

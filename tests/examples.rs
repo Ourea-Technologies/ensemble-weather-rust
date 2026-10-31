@@ -164,7 +164,7 @@ fn the_blocking_client_works_end_to_end() {
         .unwrap();
     assert_eq!(slugs, ["mt-hood-meadows", "timberline-lodge"]);
     let err = client
-        .forecast_at(ensemble_weather::Point::new(45.0, -121.0))
+        .get_point_forecast(ensemble_weather::Point::new(45.0, -121.0))
         .send()
         .unwrap_err();
     assert_eq!(err.category(), ensemble_weather::Category::Permission);

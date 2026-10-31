@@ -15,6 +15,10 @@ server's public spec byte for byte). Breaking, as 0.x allows.
 
 ### Changed
 
+- The coordinate methods follow the operation ids: `forecast_at` is
+  `get_point_forecast`, `current_at` is `get_point_current`, `alerts_at` is
+  `get_point_alerts` and `nearby_at` is `get_point_nearby` (on the async and
+  blocking clients). There are no aliases.
 - `precip_*` fields are `precipitation_*`: `DailyForecast::total_precipitation`,
   `total_precipitation_if_wet`, `precipitation_probability`,
   `precipitation_occurrence_probability`, `precipitation_type`,

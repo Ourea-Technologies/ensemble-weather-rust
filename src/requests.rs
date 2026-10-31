@@ -36,11 +36,11 @@ pub(crate) mod ops {
     pub(crate) const LOCATION_FORECAST: Operation = keyed("getLocationForecast");
     pub(crate) const POINT_FORECAST: Operation = keyed("getPointForecast");
     pub(crate) const CURRENT: Operation = keyed("getCurrentConditions");
-    pub(crate) const CURRENT_AT: Operation = keyed("getCurrentByCoordinates");
+    pub(crate) const POINT_CURRENT: Operation = keyed("getCurrentByCoordinates");
     pub(crate) const ALERTS: Operation = keyed("getLocationAlerts");
-    pub(crate) const ALERTS_AT: Operation = keyed("getAlertsByCoordinates");
+    pub(crate) const POINT_ALERTS: Operation = keyed("getAlertsByCoordinates");
     pub(crate) const NEARBY: Operation = keyed("getNearbyLocations");
-    pub(crate) const NEARBY_AT: Operation = keyed("getNearbyByCoordinates");
+    pub(crate) const POINT_NEARBY: Operation = keyed("getNearbyByCoordinates");
     pub(crate) const SEARCH: Operation = open("searchLocations");
     pub(crate) const ALL_LOCATIONS: Operation = keyed("getAllLocations");
     pub(crate) const STATE_LOCATIONS: Operation = keyed("getLocations");
@@ -57,11 +57,11 @@ pub(crate) mod ops {
         LOCATION_FORECAST,
         POINT_FORECAST,
         CURRENT,
-        CURRENT_AT,
+        POINT_CURRENT,
         ALERTS,
-        ALERTS_AT,
+        POINT_ALERTS,
         NEARBY,
-        NEARBY_AT,
+        POINT_NEARBY,
         SEARCH,
         ALL_LOCATIONS,
         STATE_LOCATIONS,
@@ -317,7 +317,7 @@ pub(crate) struct ForecastParams {
     feels_like: Vec<String>,
 }
 
-/// A forecast request, from [`Client::forecast`] or [`Client::forecast_at`].
+/// A forecast request, from [`Client::forecast`] or [`Client::get_point_forecast`].
 ///
 /// ```no_run
 /// use ensemble_weather::{Chance, Client, Threshold, Total, Units, Variable, Window};
@@ -489,7 +489,7 @@ pub(crate) struct CurrentParams {
 }
 
 /// A current-conditions request, from [`Client::current`] or
-/// [`Client::current_at`].
+/// [`Client::get_point_current`].
 ///
 /// ```no_run
 /// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
@@ -542,7 +542,7 @@ pub(crate) struct AlertsParams {
     target: Target,
 }
 
-/// An alerts request, from [`Client::alerts`] or [`Client::alerts_at`].
+/// An alerts request, from [`Client::alerts`] or [`Client::get_point_alerts`].
 ///
 /// ```no_run
 /// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
@@ -585,12 +585,12 @@ pub struct NearbyRequest<'a, C = Client> {
     params: NearbyParams,
 }
 
-/// A nearby-locations request around a point, from [`Client::nearby_at`].
+/// A nearby-locations request around a point, from [`Client::get_point_nearby`].
 ///
 /// ```no_run
 /// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
 /// use ensemble_weather::Point;
-/// let near = client.nearby_at(Point::new(45.33, -121.66)).limit(5).await?;
+/// let near = client.get_point_nearby(Point::new(45.33, -121.66)).limit(5).await?;
 /// # let _ = near;
 /// # Ok(()) }
 /// ```
@@ -627,7 +627,7 @@ macro_rules! nearby_setters {
 nearby_setters!(NearbyRequest);
 nearby_setters!(NearbyPointRequest);
 sendable!(NearbyRequest => NearbyLocations, exec_nearby);
-sendable!(NearbyPointRequest => NearbyPoint, exec_nearby_at);
+sendable!(NearbyPointRequest => NearbyPoint, exec_point_nearby);
 
 // ------------------------------------------------------------------ search
 
@@ -1087,7 +1087,7 @@ macro_rules! constructors {
             }
 
             /// The forecast at a point. It needs a Pro API key.
-            pub fn forecast_at(&self, point: Point) -> ForecastRequest<'_, Self> {
+            pub fn get_point_forecast(&self, point: Point) -> ForecastRequest<'_, Self> {
                 ForecastRequest {
                     client: self,
                     params: forecast_params(Target::Point(point)),
@@ -1103,7 +1103,7 @@ macro_rules! constructors {
             }
 
             /// Current conditions at a point. It needs an API key.
-            pub fn current_at(&self, point: Point) -> CurrentRequest<'_, Self> {
+            pub fn get_point_current(&self, point: Point) -> CurrentRequest<'_, Self> {
                 CurrentRequest {
                     client: self,
                     params: current_params(Target::Point(point)),
@@ -1121,7 +1121,7 @@ macro_rules! constructors {
             }
 
             /// The weather alerts in effect at a point (no elevation). It needs an API key.
-            pub fn alerts_at(&self, point: Point) -> AlertsRequest<'_, Self> {
+            pub fn get_point_alerts(&self, point: Point) -> AlertsRequest<'_, Self> {
                 AlertsRequest {
                     client: self,
                     params: AlertsParams {
@@ -1139,7 +1139,7 @@ macro_rules! constructors {
             }
 
             /// The locations near a point (no elevation).
-            pub fn nearby_at(&self, point: Point) -> NearbyPointRequest<'_, Self> {
+            pub fn get_point_nearby(&self, point: Point) -> NearbyPointRequest<'_, Self> {
                 NearbyPointRequest {
                     client: self,
                     params: nearby_params(Target::Point(point)),
@@ -1337,7 +1337,7 @@ impl Client {
             }
             Target::Point(point) => {
                 point.query(&mut q, true);
-                self.get(ops::CURRENT_AT, &["current"], &q).await
+                self.get(ops::POINT_CURRENT, &["current"], &q).await
             }
         }
     }
@@ -1355,11 +1355,14 @@ impl Client {
             }
             Target::Point(point) => {
                 if point.elevation_m.is_some() {
-                    return Err(Error::usage(ops::ALERTS_AT.id, "alerts take no elevation"));
+                    return Err(Error::usage(
+                        ops::POINT_ALERTS.id,
+                        "alerts take no elevation",
+                    ));
                 }
                 let mut q = Query::default();
                 point.query(&mut q, false);
-                self.get(ops::ALERTS_AT, &["alerts"], &q).await
+                self.get(ops::POINT_ALERTS, &["alerts"], &q).await
             }
         }
     }
@@ -1385,16 +1388,22 @@ impl Client {
             .await
     }
 
-    pub(crate) async fn exec_nearby_at(&self, p: NearbyParams) -> Result<NearbyPoint> {
+    pub(crate) async fn exec_point_nearby(&self, p: NearbyParams) -> Result<NearbyPoint> {
         let mut q = self.nearby_query(&p);
         let Target::Point(point) = &p.target else {
-            return Err(Error::usage(ops::NEARBY_AT.id, "nearby_at needs a point"));
+            return Err(Error::usage(
+                ops::POINT_NEARBY.id,
+                "get_point_nearby needs a point",
+            ));
         };
         if point.elevation_m.is_some() {
-            return Err(Error::usage(ops::NEARBY_AT.id, "nearby takes no elevation"));
+            return Err(Error::usage(
+                ops::POINT_NEARBY.id,
+                "nearby takes no elevation",
+            ));
         }
         point.query(&mut q, false);
-        self.get(ops::NEARBY_AT, &["nearby"], &q).await
+        self.get(ops::POINT_NEARBY, &["nearby"], &q).await
     }
 
     pub(crate) async fn exec_search(&self, p: SearchParams) -> Result<SearchResults> {

@@ -8,7 +8,7 @@ async fn main() -> Result<(), Error> {
     let client = Client::new()?; // OUREA_API_KEY, if set, is used
 
     // Northern Italy is outside the forecast domain (CONUS).
-    match client.forecast_at(Point::new(45.0, 10.0)).await {
+    match client.get_point_forecast(Point::new(45.0, 10.0)).await {
         Ok(f) => println!("unexpectedly got a forecast for {}", f.location.name),
         Err(e) if e.code() == Some(&ErrorCode::OutsideCoverage) => {
             let api = e.api_error().expect("an API error");

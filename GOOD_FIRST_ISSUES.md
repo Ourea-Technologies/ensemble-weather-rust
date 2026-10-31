@@ -7,7 +7,7 @@ repository is published. Each is small, self-contained and real.
 
 **What:** a new `examples/nearby.rs` that lists the locations near
 `or/mt-hood-meadows` (`client.nearby(..).limit(5)`) and near a point
-(`client.nearby_at(Point::new(45.33, -121.66))`), printing each name, key and
+(`client.get_point_nearby(Point::new(45.33, -121.66))`), printing each name, key and
 distance.
 
 **Why:** nearby is the one family of operations with no example yet.

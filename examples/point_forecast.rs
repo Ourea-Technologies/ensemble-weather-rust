@@ -13,7 +13,7 @@ async fn main() -> Result<(), ensemble_weather::Error> {
 
     // Mt. Hood's Palmer snowfield, at its own elevation rather than the grid's.
     let palmer = Point::new(45.3442, -121.7122).elevation_m(2_600.0);
-    let forecast = client.forecast_at(palmer).max_hours(48).await?;
+    let forecast = client.get_point_forecast(palmer).max_hours(48).await?;
 
     if let Some(point) = &forecast.point {
         println!(

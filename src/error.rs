@@ -21,7 +21,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// use ensemble_weather::{Category, Client, Error, ErrorCode, Point};
 ///
 /// # async fn run(client: Client) {
-/// match client.forecast_at(Point::new(45.0, 10.0)).await {
+/// match client.get_point_forecast(Point::new(45.0, 10.0)).await {
 ///     Ok(forecast) => println!("{}", forecast.location.name),
 ///     Err(Error::OutsideCoverage(e)) => println!("outside the forecast domain: {}", e.message()),
 ///     Err(Error::RateLimited(e)) => println!("retry after {:?}", e.retry_after()),
