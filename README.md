@@ -44,13 +44,13 @@ async fn main() -> Result<(), ensemble_weather::Error> {
         .units
         .unit_for(&Variable::Temperature)
         .map_or("", |u| u.symbol());
-    for hour in forecast.forecast.timeseries.iter().take(24) {
+    for hour in forecast.series.timeseries.iter().take(24) {
         if let Some(range) = hour.ensemble.temperature.range80() {
             println!("{}  {range:.1} {unit}", hour.valid_time);
         }
     }
     for chance in &forecast.probabilities {
-        if let Some(p) = chance.probability {
+        if let Some(p) = chance.value {
             let unit = chance.threshold_unit.map_or("", |u| u.symbol());
             println!(
                 "Chance of >= {} {unit} of snow in {}-{} h: {:.0}% ({} members)",
@@ -133,7 +133,7 @@ if let Some(q) = &f.window_totals[0].quantiles {
 absent), with the served ranges as views:
 
 ```rust
-let t = &f.forecast.timeseries[0].ensemble.temperature;
+let t = &f.series.timeseries[0].ensemble.temperature;
 let median = t.median(); // p50: the median, not "the forecast"
 let r80 = t.range80();   // p10..p90
 let r50 = t.range50();   // p25..p75
@@ -164,6 +164,14 @@ Each is a complete program: `cargo run --example <name>`.
 | [current_and_alerts](examples/current_and_alerts.rs) | current conditions and active alerts for a location |
 | [error_handling](examples/error_handling.rs) | catching an out-of-coverage error by its code; reading rate-limit state |
 | [units](examples/units.rs) | the same forecast in metric and imperial |
+| [snow_report](examples/snow_report.rs) | places ranked by snowfall (`explore`), a season to date, and the GeoJSON map layers |
+
+Beyond forecasts, current conditions and the catalog, the client has
+`explore(metric)` (places ranked by snow, precipitation, snow depth or season
+totals), `season`, `snow_trend` (Plus or Pro), `snowpack` and
+`snowpack_plume` (beta), `composition`, and the GeoJSON layers
+`alert_outlines` and `avalanche_zones`. `forecast(..).members(Members::Plume)`
+asks for the plume view's columns.
 
 List calls also stream every item, following the cursor:
 
@@ -187,6 +195,48 @@ for location in client.catalog_locations().items() {
     println!("{}", location?.location.name);
 }
 ```
+
+## Names that differ from the API's JSON
+
+The models use the API's JSON field names, except where a name repeats a
+word of the type that holds it (one table for every Ourea SDK, BEHAVIOR.md
+3.0 in the spec). The models decode the JSON names and serialise these SDK
+names (which they decode too); each renamed field's docs start with its
+JSON name. GeoJSON bodies (`alert_outlines`, `avalanche_zones`) keep every
+key as the API sends it.
+
+| Type | JSON | SDK |
+|---|---|---|
+| `Forecast` | `forecast`, `elevation_forecasts` | `series`, `elevations` |
+| `Current` | `current` | `now` |
+| `CurrentConditions` | `condition`, `condition_text`, `condition_icon` | `code`, `text`, `icon` |
+| `CurrentStation` | `station_id` | `id` |
+| `ProbabilityResult` | `probability` | `value` |
+| `ProbabilityThresholds` | `daily_precipitation_probability`, `daily_precipitation_occurrence_probability`, `daily_snow_probability` | `daily_precipitation`, `daily_precipitation_occurrence`, `daily_snow` |
+| `WindowTotal` | `window_start_hours`, `window_end_hours` | `start_hours`, `end_hours` |
+| `ModelMembers` | `members` | `items` |
+| `MemberForecast` | `member_id` | `id` |
+| `MemberPlume` | `members` | `pool` |
+| `Alerts` | `alerts`, `alert_count` | `items`, `count` |
+| `LocationsPage` | `locations` | `items` |
+| `NearbyLocations` | `location`, `locations` | `origin`, `items` |
+| `NearbyPoint` | `locations` | `items` |
+| `Runs` | `runs` | `items` |
+| `ElevationForecast`, `ElevationSummary`, `SnowTrendElevation` | `elevation` | `height` |
+| `CatalogElevation` | `elevation_m` | `height_m` |
+| `CatalogStation` (and `CatalogStationDetail`) | `source_station_id`, `station_status`, `station_url` | `source_id`, `status`, `url` |
+| `CatalogNearbyStation` | `station_status` | `status` |
+| `CatalogTemplate` | `template_variant` | `variant` |
+| `CatalogContentEntry` | `resolved_locale` | `locale` |
+| `SensorObservation` | `observation_time` | `observed_at` |
+| `PassHour` | `snow_level_above_pass` | `snow_level_margin` |
+| `PassStatusSegment` | `status`, `status_text` | `state`, `text` |
+| `AvalancheForecast` | `forecast_url` | `url` |
+| `SeasonTotal` | `total` | `amount` |
+| `SnowTrendDay` | `snow` | `amount` |
+| error body | `error` | `Error::code()` |
+
+A JSON `type` is `kind` in Rust (a keyword), and serialises as `type`.
 
 ## Errors, retries and rate limits
 

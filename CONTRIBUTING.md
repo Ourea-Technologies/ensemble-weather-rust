@@ -46,7 +46,7 @@ the same commands.
   through a scripted transport on Tokio's paused clock, with the backoff
   jitter pinned to its upper bound. A case the runner cannot map (an unknown
   operation, argument or expectation) is a failure, never a skip, and the
-  count (43) is pinned.
+  count (58) is pinned.
 - **Examples.** `tests/examples.rs` runs every `examples/*.rs` binary against
   `tests/support`, a local stand-in for the API, with `OUREA_BASE_URL`
   pointing at it, and checks the output. To try an example by hand, run
@@ -193,7 +193,10 @@ standard library's randomly keyed hasher, rather than adding `sha2` and
 the crate (crate settings: repository `Ourea-Technologies/ensemble-weather-rust`,
 workflow `release.yml`, environment `crates-io`). A brand-new crate cannot use
 trusted publishing for its very first upload, so `0.1.0` is published once by
-an owner with `cargo publish`, and every later release by the workflow.
+an owner with `cargo publish`, and every later release by the workflow. The
+workflow skips the upload of a version crates.io already has, so tagging
+`v0.1.0` after the hand upload still runs the gates and creates the GitHub
+release.
 
 ## Code of conduct
 
