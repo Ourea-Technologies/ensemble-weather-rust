@@ -11,16 +11,22 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn example_binary(name: &str) -> PathBuf {
-    // target/<profile>/deps/examples-<hash> -> target/<profile>/examples/<name>
+    // The examples are in target/<profile>/examples. The test binary is in
+    // target/<profile>/deps, or, with cargo's separate build directory (the
+    // default since Rust 1.100), deeper under target/<profile>/build; so look
+    // in every ancestor of the test binary.
     let exe = std::env::current_exe().unwrap();
-    let dir = exe.parent().unwrap().parent().unwrap().join("examples");
-    let path = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
-    assert!(
-        path.exists(),
-        "example binary {} is missing; run `cargo test` (which builds examples)",
-        path.display()
-    );
-    path
+    let file = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    let found = exe
+        .ancestors()
+        .map(|dir| dir.join("examples").join(&file))
+        .find(|path| path.is_file());
+    found.unwrap_or_else(|| {
+        panic!(
+            "example binary {file} is missing above {}; run `cargo test` (which builds examples)",
+            exe.display()
+        )
+    })
 }
 
 fn run(name: &str, base_url: &str, api_key: Option<&str>) -> String {
@@ -198,8 +204,14 @@ async fn serve_stub() {
 #[test]
 fn the_readme_quickstart_is_the_example() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let readme = std::fs::read_to_string(root.join("README.md")).unwrap();
-    let example = std::fs::read_to_string(root.join("examples/quickstart.rs")).unwrap();
+    // A Windows checkout may have CRLF line ends; compare the text.
+    let read = |p: &str| {
+        std::fs::read_to_string(root.join(p))
+            .unwrap()
+            .replace("\r\n", "\n")
+    };
+    let readme = read("README.md");
+    let example = read("examples/quickstart.rs");
     let example: String = example
         .lines()
         .skip_while(|l| l.starts_with("//!"))
