@@ -10,13 +10,13 @@ use serde_json::{Map, Value, json};
 
 use super::mock::MockTransport;
 use crate::{
-    Aggregation, Chance, Client, Error, Forecast, Op, Point, Threshold, Total, Unit, Units,
-    Variable, Window,
+    Aggregation, AlertClass, Chance, Client, Error, ExploreMetric, ExplorePoints, Forecast,
+    LocationType, Members, Op, Order, Point, Threshold, Total, Unit, Units, Variable, Window,
 };
 
 /// The number of vectors the pinned spec ships. A vector added or removed
 /// upstream fails this test until the runner is looked at.
-const EXPECTED_VECTORS: usize = 43;
+const EXPECTED_VECTORS: usize = 58;
 
 fn vectors_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("spec/vectors")
@@ -129,6 +129,40 @@ fn check_args(args: &Map<String, Value>, known: &[&str]) -> Result<(), Fail> {
     Ok(())
 }
 
+/// Strings or a list of strings: `"all"` and `["all"]` both map to one list.
+fn string_list(v: Option<&Value>) -> Result<Vec<String>, Fail> {
+    match v {
+        None => Ok(Vec::new()),
+        Some(Value::String(s)) => Ok(vec![s.clone()]),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|i| {
+                i.as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("not a string: {i}"))
+            })
+            .collect(),
+        Some(other) => Err(format!("not a string list: {other}")),
+    }
+}
+
+fn near(v: Option<&Value>) -> Result<Option<(f64, f64)>, Fail> {
+    let Some(v) = v else { return Ok(None) };
+    match (v["lat"].as_f64(), v["lon"].as_f64()) {
+        (Some(lat), Some(lon)) => Ok(Some((lat, lon))),
+        _ => Err(format!("bad near {v}")),
+    }
+}
+
+/// An outcome from any top-level result.
+fn outcome<T: serde::Serialize>(r: &T, meta: &crate::ResponseMeta) -> Outcome {
+    Outcome {
+        value: to_value(r, meta),
+        forecast: None,
+        items: None,
+    }
+}
+
 fn to_value<T: serde::Serialize>(v: &T, meta: &crate::ResponseMeta) -> Value {
     let mut value = serde_json::to_value(v).unwrap();
     if let Value::Object(map) = &mut value {
@@ -185,6 +219,10 @@ async fn run_call(client: &Client, call: &Value) -> Result<Result<Outcome, Error
                         "models",
                         "prob",
                         "totals",
+                        "elevations",
+                        "sources",
+                        "exclude_sources",
+                        "include",
                     ],
                 )?;
                 match (text("location"), text("state"), text("slug")) {
@@ -207,8 +245,31 @@ async fn run_call(client: &Client, call: &Value) -> Result<Result<Outcome, Error
             if let Some(v) = int("max_hours") {
                 req = req.max_hours(v);
             }
+            match args.get("members") {
+                None => {}
+                Some(Value::Bool(b)) => req = req.members(*b),
+                Some(Value::String(s)) => {
+                    req = req.members(s.parse::<Members>().map_err(|e| e.to_string())?);
+                }
+                Some(other) => return Err(format!("bad members {other}")),
+            }
+            let elevations = string_list(args.get("elevations"))?;
+            if !elevations.is_empty() {
+                req = req.elevations(elevations);
+            }
+            let sources = string_list(args.get("sources"))?;
+            if !sources.is_empty() {
+                req = req.sources(sources);
+            }
+            let exclude = string_list(args.get("exclude_sources"))?;
+            if !exclude.is_empty() {
+                req = req.exclude_sources(exclude);
+            }
+            let include = string_list(args.get("include"))?;
+            if !include.is_empty() {
+                req = req.include(include);
+            }
             for (k, setter) in [
-                ("members", ForecastSetter::Members),
                 ("nowcast", ForecastSetter::Nowcast),
                 ("include_past", ForecastSetter::IncludePast),
                 ("daily", ForecastSetter::Daily),
@@ -242,26 +303,204 @@ async fn run_call(client: &Client, call: &Value) -> Result<Result<Outcome, Error
             })
         }
         "searchLocations" => {
-            check_args(args, &["q"])?;
-            client
-                .search(text("q").ok_or("no q")?)
-                .await
-                .map(|r| Outcome {
-                    value: to_value(&r, &r.meta),
-                    forecast: None,
-                    items: None,
-                })
+            check_args(args, &["q", "sort", "order", "near", "radius_km"])?;
+            let mut req = client.search(text("q").ok_or("no q")?);
+            if let Some(s) = text("sort") {
+                req = req.sort(ExploreMetric::from(s));
+            }
+            if let Some(o) = text("order") {
+                req = req.order(Order::from(o));
+            }
+            if let Some((lat, lon)) = near(args.get("near"))? {
+                req = req.near(lat, lon);
+            }
+            if let Some(r) = float("radius_km") {
+                req = req.radius_km(r);
+            }
+            req.await.map(|r| outcome(&r, &r.meta))
         }
-        "getCatalogLocation" => {
+        "explore" => {
+            check_args(
+                args,
+                &[
+                    "metric",
+                    "order",
+                    "type",
+                    "state",
+                    "near",
+                    "radius_km",
+                    "elevation_min",
+                    "elevation_max",
+                    "points",
+                    "limit",
+                    "cursor",
+                    "units",
+                ],
+            )?;
+            let mut req = client.explore(ExploreMetric::from(
+                text("metric").ok_or("explore needs a metric")?,
+            ));
+            if let Some(o) = text("order") {
+                req = req.order(Order::from(o));
+            }
+            if let Some(t) = text("type") {
+                req = req.kind(LocationType::from(t));
+            }
+            if let Some(s) = text("state") {
+                req = req.state(s);
+            }
+            if let Some((lat, lon)) = near(args.get("near"))? {
+                req = req.near(lat, lon);
+            }
+            if let Some(r) = float("radius_km") {
+                req = req.radius_km(r);
+            }
+            if let Some(e) = float("elevation_min") {
+                req = req.elevation_min(e);
+            }
+            if let Some(e) = float("elevation_max") {
+                req = req.elevation_max(e);
+            }
+            if let Some(p) = text("points") {
+                req = req.points(ExplorePoints::from(p));
+            }
+            if let Some(l) = int("limit") {
+                req = req.limit(l);
+            }
+            if let Some(c) = text("cursor") {
+                req = req.cursor(c);
+            }
+            if let Some(u) = text("units") {
+                req = req.units(Units::from(u));
+            }
+            req.await.map(|r| outcome(&r, &r.meta))
+        }
+        "getComposition" => {
+            check_args(args, &[])?;
+            client.composition().await.map(|r| outcome(&r, &r.meta))
+        }
+        "getAvalancheZones" => {
+            check_args(args, &[])?;
+            client.avalanche_zones().await.map(|r| outcome(&r, &r.meta))
+        }
+        "getAlertOutlines" => {
+            check_args(args, &["classes", "bbox"])?;
+            let mut req = client.alert_outlines();
+            let classes = string_list(args.get("classes"))?;
+            if !classes.is_empty() {
+                req = req.classes(classes.iter().map(|c| AlertClass::from(c.as_str())));
+            }
+            if let Some(b) = args.get("bbox") {
+                let n = |k: &str| b[k].as_f64().ok_or_else(|| format!("bad bbox {b}"));
+                req = req.bbox(n("west")?, n("south")?, n("east")?, n("north")?);
+            }
+            req.await.map(|r| outcome(&r, &r.meta))
+        }
+        "getLocationSeason" => {
+            check_args(args, &["location", "water_year", "include", "units"])?;
+            let mut req = client.season(text("location").ok_or("no location")?);
+            if let Some(y) = int("water_year") {
+                req = req.water_year(y);
+            }
+            match string_list(args.get("include"))?.as_slice() {
+                [] => {}
+                [d] if d == "daily" => req = req.include_daily(true),
+                other => return Err(format!("the runner does not map include {other:?}")),
+            }
+            if let Some(u) = text("units") {
+                req = req.units(Units::from(u));
+            }
+            req.await.map(|r| outcome(&r, &r.meta))
+        }
+        "getLocationSnowTrend" => {
+            check_args(args, &["location", "elevation", "units"])?;
+            let mut req = client.snow_trend(text("location").ok_or("no location")?);
+            if let Some(e) = text("elevation") {
+                req = req.elevation(e);
+            }
+            if let Some(u) = text("units") {
+                req = req.units(Units::from(u));
+            }
+            req.await.map(|r| outcome(&r, &r.meta))
+        }
+        "getLocationSnowpack" => {
+            check_args(args, &["location", "units"])?;
+            let mut req = client.snowpack(text("location").ok_or("no location")?);
+            if let Some(u) = text("units") {
+                req = req.units(Units::from(u));
+            }
+            req.await.map(|r| outcome(&r, &r.meta))
+        }
+        "getLocationSnowpackPlume" => {
+            check_args(args, &["location", "units"])?;
+            let mut req = client.snowpack_plume(text("location").ok_or("no location")?);
+            if let Some(u) = text("units") {
+                req = req.units(Units::from(u));
+            }
+            req.await.map(|r| outcome(&r, &r.meta))
+        }
+        "getCurrentConditions" => {
+            check_args(args, &["location"])?;
+            client
+                .current(text("location").ok_or("no location")?)
+                .await
+                .map(|r| outcome(&r, &r.meta))
+        }
+        "getLocationAlerts" => {
+            check_args(args, &["location"])?;
+            client
+                .alerts(text("location").ok_or("no location")?)
+                .await
+                .map(|r| outcome(&r, &r.meta))
+        }
+        "getLocations" => {
+            check_args(args, &["state", "limit"])?;
+            let mut req = client.locations().state(text("state").ok_or("no state")?);
+            if let Some(l) = int("limit") {
+                req = req.limit(l);
+            }
+            req.await.map(|r| outcome(&r, &r.meta))
+        }
+        "getNearbyLocations" => {
+            check_args(args, &["location"])?;
+            client
+                .nearby(text("location").ok_or("no location")?)
+                .await
+                .map(|r| outcome(&r, &r.meta))
+        }
+        "getNearbyByCoordinates" => {
+            check_args(args, &["lat", "lon"])?;
+            client
+                .get_point_nearby(Point::new(
+                    float("lat").ok_or("no lat")?,
+                    float("lon").ok_or("no lon")?,
+                ))
+                .await
+                .map(|r| outcome(&r, &r.meta))
+        }
+        "getAvailableRuns" => {
+            check_args(args, &["limit"])?;
+            let mut req = client.runs();
+            if let Some(l) = int("limit") {
+                req = req.limit(l);
+            }
+            req.await.map(|r| outcome(&r, &r.meta))
+        }
+        "getCatalogStation" => {
             check_args(args, &["slug"])?;
             client
-                .catalog_location(text("slug").ok_or("no slug")?)
+                .catalog_station(text("slug").ok_or("no slug")?)
                 .await
-                .map(|r| Outcome {
-                    value: to_value(&r, &r.meta),
-                    forecast: None,
-                    items: None,
-                })
+                .map(|r| outcome(&r, &r.meta))
+        }
+        "getCatalogLocation" => {
+            check_args(args, &["slug", "include"])?;
+            let mut req = client.catalog_location(text("slug").ok_or("no slug")?);
+            let include = string_list(args.get("include"))?;
+            if !include.is_empty() {
+                req = req.include(include);
+            }
+            req.await.map(|r| outcome(&r, &r.meta))
         }
         "getAttribution" => {
             check_args(args, &[])?;
@@ -298,7 +537,6 @@ async fn run_call(client: &Client, call: &Value) -> Result<Result<Outcome, Error
 
 #[derive(Clone, Copy)]
 enum ForecastSetter {
-    Members,
     Nowcast,
     IncludePast,
     Daily,
@@ -309,7 +547,6 @@ enum ForecastSetter {
 impl ForecastSetter {
     fn apply(self, r: crate::ForecastRequest<'_>, v: bool) -> crate::ForecastRequest<'_> {
         match self {
-            Self::Members => r.members(v),
             Self::Nowcast => r.nowcast(v),
             Self::IncludePast => r.include_past(v),
             Self::Daily => r.daily(v),
@@ -366,10 +603,84 @@ fn check_result(expect: &Map<String, Value>, outcome: &Outcome) -> Result<(), Fa
                     "{path}: not parsed to the Unknown case (or path not mapped)"
                 );
             }
+            Value::String(w) if is_timestamp_path(path) => {
+                let same = got.as_str().is_some_and(|g| {
+                    g == w.as_str() || (instant(g).is_some() && instant(g) == instant(w))
+                });
+                ensure!(same, "{path}: want the instant {w}, got {got}");
+            }
             other => ensure!(got == other, "{path}: want {other}, got {got}"),
         }
     }
     Ok(())
+}
+
+/// The timestamp fields BEHAVIOR 13 compares as instants.
+fn is_timestamp_path(path: &str) -> bool {
+    let last = path.rsplit('.').next().unwrap_or(path);
+    let last = last.split('[').next().unwrap_or(last);
+    matches!(last, "valid_time" | "observed_at" | "initialized_at")
+}
+
+/// An RFC 3339 timestamp as (seconds since the epoch, nanoseconds), or
+/// `None` when it is not one.
+fn instant(s: &str) -> Option<(i64, u32)> {
+    let b = s.as_bytes();
+    let num = |r: std::ops::Range<usize>| -> Option<i64> { s.get(r)?.parse().ok() };
+    if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || !matches!(b[10], b'T' | b't') {
+        return None;
+    }
+    let (year, month, day) = (num(0..4)?, num(5..7)?, num(8..10)?);
+    let (hour, minute, second) = (num(11..13)?, num(14..16)?, num(17..19)?);
+    let mut i = 19;
+    let mut nanos = 0u32;
+    if b.get(i) == Some(&b'.') {
+        let start = i + 1;
+        i = start;
+        while b.get(i).is_some_and(u8::is_ascii_digit) {
+            i += 1;
+        }
+        let frac = &s[start..i];
+        let padded = format!("{frac:0<9}");
+        nanos = padded.get(..9)?.parse().ok()?;
+    }
+    let offset = match b.get(i)? {
+        b'Z' | b'z' if i + 1 == b.len() => 0,
+        sign @ (b'+' | b'-') if i + 6 == b.len() => {
+            let o = num(i + 1..i + 3)? * 3600 + num(i + 4..i + 6)? * 60;
+            if *sign == b'+' { o } else { -o }
+        }
+        _ => return None,
+    };
+    // Days from the civil date (Howard Hinnant's algorithm).
+    let (shifted_year, shifted_month) = if month <= 2 {
+        (year - 1, month + 9)
+    } else {
+        (year, month - 3)
+    };
+    let era = shifted_year.div_euclid(400);
+    let yoe = shifted_year - era * 400;
+    let doy = (153 * shifted_month + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some((
+        days * 86_400 + hour * 3600 + minute * 60 + second - offset,
+        nanos,
+    ))
+}
+
+#[test]
+fn instants_compare_across_offsets() {
+    assert_eq!(instant("1970-01-01T00:00:00Z"), Some((0, 0)));
+    assert_eq!(
+        instant("2026-11-25T04:00:00Z"),
+        instant("2026-11-24T20:00:00-08:00")
+    );
+    assert_eq!(
+        instant("2026-11-25T04:00:00.5+00:00"),
+        Some((instant("2026-11-25T04:00:00Z").unwrap().0, 500_000_000))
+    );
+    assert_eq!(instant("2026-11-25"), None);
 }
 
 fn check_error(want: &Map<String, Value>, err: &Error) -> Result<(), Fail> {

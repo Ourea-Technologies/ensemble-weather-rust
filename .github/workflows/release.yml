@@ -57,9 +57,27 @@ jobs:
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1 (master)
         with:
           toolchain: stable
+      # The first version of a crate is uploaded by hand (trusted publishing
+      # needs the crate to exist), so a version crates.io already has is not
+      # uploaded again; the release job still runs.
+      - name: Is this version on crates.io already?
+        id: exists
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            -A 'ensemble-weather-rust release workflow (github.com/Ourea-Technologies/ensemble-weather-rust)' \
+            "https://crates.io/api/v1/crates/ensemble-weather/${TAG#v}")
+          case $code in
+            200) echo "published=true" >> "$GITHUB_OUTPUT"; echo "${TAG#v} is on crates.io already" ;;
+            404) echo "published=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "crates.io answered $code"; exit 1 ;;
+          esac
       - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        if: steps.exists.outputs.published == 'false'
         id: auth
       - name: cargo publish
+        if: steps.exists.outputs.published == 'false'
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish --locked

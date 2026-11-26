@@ -15,9 +15,9 @@ pub struct Runs {
     pub meta: ResponseMeta,
     /// What a forecast request serves now; `None` when no cycle is servable.
     pub served: Option<ServedRun>,
-    /// The runs, newest first.
-    #[serde(default)]
-    pub runs: Vec<AvailableRun>,
+    /// (JSON `runs`) The runs, newest first.
+    #[serde(default, rename(deserialize = "runs"), alias = "items")]
+    pub items: Vec<AvailableRun>,
     /// The number of runs.
     pub count: u32,
     /// The cursor of the next page; `None` on the last page.

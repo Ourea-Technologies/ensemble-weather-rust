@@ -7,25 +7,28 @@ use ensemble_weather::Client;
 async fn main() -> Result<(), ensemble_weather::Error> {
     let client = Client::new()?;
 
-    let now = client.current("or/mt-hood-meadows").await?;
-    if let Some(c) = &now.current {
+    let current = client.current("or/mt-hood-meadows").await?;
+    if let Some(c) = &current.now {
         println!(
             "{}: {} {}, wind {} from {}° ({})",
-            c.time, c.temperature, c.condition_text, c.wind_speed, c.wind_direction, c.source
+            c.time, c.temperature, c.text, c.wind_speed, c.wind_direction, c.source
         );
     } else {
         println!("no current hour is being served");
     }
-    for sensor in &now.sensors {
+    if let Some(summary) = &current.summary {
+        println!("{}", summary.short);
+    }
+    for sensor in &current.sensors {
         println!(
             "  sensor {} ({}) at {}",
-            sensor.name, sensor.source, sensor.observation_time
+            sensor.name, sensor.source, sensor.observed_at
         );
     }
 
     let alerts = client.alerts("or/mt-hood-meadows").await?;
-    println!("{} alert(s) as of {}", alerts.alert_count, alerts.as_of);
-    for alert in &alerts.alerts {
+    println!("{} alert(s) as of {}", alerts.count, alerts.as_of);
+    for alert in &alerts.items {
         println!(
             "  {} [{}]: {} (expires {})",
             alert.event, alert.severity, alert.headline, alert.expires

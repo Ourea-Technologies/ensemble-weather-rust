@@ -22,12 +22,12 @@
 //!         .chance(Chance::at_least(Variable::Snowfall, Threshold::inches(6.0)))
 //!         .await?;
 //!
-//!     for hour in forecast.forecast.timeseries.iter().take(24) {
+//!     for hour in forecast.series.timeseries.iter().take(24) {
 //!         if let Some(range) = hour.ensemble.temperature.range80() {
 //!             println!("{}  {range:.1}", hour.valid_time);
 //!         }
 //!     }
-//!     if let Some(p) = forecast.probabilities[0].probability {
+//!     if let Some(p) = forecast.probabilities[0].value {
 //!         println!("chance of 6 in of snow in 24 h: {:.0}%", p * 100.0);
 //!     }
 //!     Ok(())
@@ -50,6 +50,23 @@
 //! connection errors, 429, 502, 503 and 504 with full-jitter backoff
 //! (honouring `Retry-After` on 429, 503 and 504); and
 //! revalidates repeated requests with a local ETag cache.
+//!
+//! # Models
+//!
+//! Every response type is at the crate root. Fields the API may omit are
+//! `Option` (absent, never 0) or an empty `Vec`; unknown fields are ignored
+//! and unknown enum values keep their raw string, so a newer API never breaks
+//! an older SDK. Times are RFC 3339 strings and dates `YYYY-MM-DD` strings,
+//! exactly as the API sends them.
+//!
+//! Field names are the API's JSON names, except where one repeats a word of
+//! the type that holds it (BEHAVIOR.md 3.0, one table for every Ourea SDK):
+//! [`Forecast::series`] is the JSON `forecast`, [`Current::now`] is
+//! `current`, [`ProbabilityResult::value`] is `probability`, list rows are
+//! `items`, and so on. Each such field's docs start with its JSON name. The
+//! models decode the JSON names and serialise the SDK names (which they
+//! decode too). The GeoJSON layers ([`AlertOutlines`], [`AvalancheZones`])
+//! keep every key as the API sends it.
 //!
 //! # Errors
 //!
@@ -75,7 +92,7 @@ mod client;
 mod enums;
 mod error;
 mod meta;
-pub mod models;
+mod models;
 mod paging;
 mod probability;
 mod query;
@@ -92,27 +109,26 @@ pub use client::{
     ENV_API_KEY, ENV_BASE_URL, VERSION,
 };
 pub use enums::{
-    AlertCertainty, AlertSeverity, AlertUrgency, ClampedOption, Condition, ConditionIcon,
-    CurrentSource, ElevationSource, FreezingLevelKind, GapFlowStatus, InversionKind, LocationType,
-    MembersView, MoonPhase, NowcastSource, NullReason, PrecipKind, Season, SectionKind, SourceKind,
-    StationNetwork, StationStatus, StormOrientation, TemplateVariant, WindStatus,
+    AlertCertainty, AlertClass, AlertSeverity, AlertUrgency, AstronomicalSeason, ClampedOption,
+    Condition, ConditionIcon, CurrentSource, ElevationSource, ExploreMetric, ExplorePoints,
+    FreezingLevelKind, GapFlowStatus, InversionKind, LocationType, MembersView, MoonPhase,
+    NowcastSource, NullReason, Order, PassStatusLevel, PrecipKind, SectionKind, SnowCharacter,
+    SourceKind, StationNetwork, StationStatus, StormOrientation, TemplateVariant, WindStatus,
 };
 pub use error::{
     ApiError, Category, ConnectionError, ConnectionErrorKind, Error, ErrorCode, NearestLocation,
     Result, UsageError,
 };
 pub use meta::{Headers, RateLimit, ResponseMeta};
-pub use models::{
-    Alerts, Attribution, CatalogLocationDetail, CatalogLocationPage, CatalogStationDetail,
-    CatalogStationPage, Current, Forecast, Interval, LocationRef, LocationsPage, NearbyLocations,
-    NearbyPoint, ProbabilityResult, Quantiles, Runs, SearchResults, WindowTotal,
-};
+pub use models::*;
 pub use paging::Items;
 pub use probability::{Aggregation, Chance, MAX_WINDOW_HOURS, Op, Total, Variable, Window};
 pub use requests::{
-    AlertsRequest, AttributionRequest, CatalogLocationRequest, CatalogLocationsRequest,
-    CatalogStationRequest, CatalogStationsRequest, CurrentRequest, ForecastRequest, LocationKey,
-    LocationsRequest, NearbyPointRequest, NearbyRequest, Point, RunsRequest, SearchRequest,
+    AlertOutlinesRequest, AlertsRequest, AttributionRequest, AvalancheZonesRequest,
+    CatalogLocationRequest, CatalogLocationsRequest, CatalogStationRequest, CatalogStationsRequest,
+    CompositionRequest, CurrentRequest, ExploreRequest, ForecastRequest, LocationKey,
+    LocationsRequest, Members, NearbyPointRequest, NearbyRequest, Point, RunsRequest,
+    SearchRequest, SeasonRequest, SnowTrendRequest, SnowpackPlumeRequest, SnowpackRequest,
 };
 pub use transport::MAX_RESPONSE_BYTES;
 pub use units::{Threshold, Unit, Units};

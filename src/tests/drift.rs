@@ -7,17 +7,24 @@
 //! - for every operation, a response synthesised with every property of every
 //!   schema it reaches decodes, and no property is dropped: a property the
 //!   models lack fails here, and so does a model field the spec lacks.
+//!
+//! The models serialise the SDK names of BEHAVIOR.md 3.0, so both checks
+//! compare them with the spec **through** the rename table, read from the
+//! pinned `spec/BEHAVIOR.md`: a row the models do not follow fails, and so
+//! does a rename the table does not list. The GeoJSON routes are compared
+//! with no renames, as BEHAVIOR.md 3.0 passes them through untouched.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value, json};
 use yaml_rust2::{Yaml, YamlLoader};
 
 use crate::requests::ops;
 use crate::{
-    Alerts, Attribution, CatalogLocationDetail, CatalogLocationPage, CatalogStationDetail,
-    CatalogStationPage, Current, Forecast, LocationsPage, NearbyLocations, NearbyPoint, Runs,
-    SearchResults,
+    AlertOutlines, Alerts, Attribution, AvalancheZones, CatalogLocationDetail, CatalogLocationPage,
+    CatalogStationDetail, CatalogStationPage, Composition, Current, ErrorCode, ExplorePage,
+    Forecast, LocationsPage, NearbyLocations, NearbyPoint, Runs, SearchResults, Season, SnowTrend,
+    Snowpack, SnowpackPlume,
 };
 
 const OUT_OF_SCOPE: &[&str] = &["getMapsToken"];
@@ -57,11 +64,56 @@ fn to_json(y: &Yaml) -> Value {
     }
 }
 
-/// Decodes `v` as the operation's response type and serialises it back.
+/// The rename table of BEHAVIOR.md 3.0: holder (a schema, or `Schema.field`
+/// for an inline object) -> wire name -> SDK name.
+fn rename_table() -> BTreeMap<String, BTreeMap<String, String>> {
+    let text = include_str!("../../spec/BEHAVIOR.md");
+    let section = text
+        .split("### 3.0")
+        .nth(1)
+        .and_then(|s| s.split("### 3.1").next())
+        .expect("BEHAVIOR.md has section 3.0");
+    let ticked = |cell: &str| -> Vec<String> {
+        cell.split('`')
+            .skip(1)
+            .step_by(2)
+            .map(|s| s.trim_end_matches("[]").to_owned())
+            .collect()
+    };
+    let mut table: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    for line in section.lines().filter(|l| l.starts_with("| `")) {
+        let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+        let (holders, wires, sdks) = (ticked(cells[1]), ticked(cells[2]), ticked(cells[3]));
+        // `ErrorResponse.error` is the SDK error's `code()`, not a model field.
+        if holders == ["ErrorResponse"] {
+            continue;
+        }
+        assert_eq!(wires.len(), sdks.len(), "a BEHAVIOR.md 3.0 row: {line}");
+        for holder in holders {
+            let row = table.entry(holder).or_default();
+            for (w, s) in wires.iter().zip(&sdks) {
+                row.insert(w.clone(), s.clone());
+            }
+        }
+    }
+    assert!(table.len() > 20, "the rename table did not parse");
+    table
+}
+
+/// Decodes `v` as the operation's response type and serialises it back
+/// (in the SDK names). The serialised value must itself decode to the same
+/// value, so a model read back from its own JSON is unchanged.
 fn round_trip(operation: &str, v: Value) -> Result<Value, String> {
     fn rt<T: serde::de::DeserializeOwned + serde::Serialize>(v: Value) -> Result<Value, String> {
         let t: T = serde_json::from_value(v).map_err(|e| e.to_string())?;
-        serde_json::to_value(&t).map_err(|e| e.to_string())
+        let out = serde_json::to_value(&t).map_err(|e| e.to_string())?;
+        let again: T = serde_json::from_value(out.clone())
+            .map_err(|e| format!("its own serialisation does not decode: {e}"))?;
+        let again = serde_json::to_value(&again).map_err(|e| e.to_string())?;
+        if again != out {
+            return Err("its own serialisation decodes to another value".into());
+        }
+        Ok(out)
     }
     match operation {
         "getLocationForecast" | "getPointForecast" => rt::<Forecast>(v),
@@ -77,6 +129,14 @@ fn round_trip(operation: &str, v: Value) -> Result<Value, String> {
         "getCatalogStation" => rt::<CatalogStationDetail>(v),
         "getAvailableRuns" => rt::<Runs>(v),
         "getAttribution" => rt::<Attribution>(v),
+        "explore" => rt::<ExplorePage>(v),
+        "getComposition" => rt::<Composition>(v),
+        "getLocationSeason" => rt::<Season>(v),
+        "getLocationSnowTrend" => rt::<SnowTrend>(v),
+        "getLocationSnowpack" => rt::<Snowpack>(v),
+        "getLocationSnowpackPlume" => rt::<SnowpackPlume>(v),
+        "getAlertOutlines" => rt::<AlertOutlines>(v),
+        "getAvalancheZones" => rt::<AvalancheZones>(v),
         other => Err(format!("no model for {other}")),
     }
 }
@@ -107,6 +167,7 @@ fn missing_keys(original: &Value, decoded: &Value, path: &str, out: &mut Vec<Str
 
 struct Ops {
     spec: Value,
+    renames: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl Ops {
@@ -204,16 +265,148 @@ impl Ops {
         }
     }
 
+    fn response_content(op: &Value) -> &Value {
+        let content = &op["responses"]["200"]["content"];
+        content
+            .get("application/json")
+            .or_else(|| content.get("application/geo+json"))
+            .unwrap_or(&Value::Null)
+    }
+
     fn response_schema(op: &Value) -> Option<Value> {
-        op["responses"]["200"]["content"]["application/json"]
-            .get("schema")
-            .cloned()
+        Self::response_content(op).get("schema").cloned()
+    }
+
+    /// Whether the operation's body is GeoJSON, passed through untouched.
+    fn is_geojson(op: &Value) -> bool {
+        op["responses"]["200"]["content"]
+            .get("application/geo+json")
+            .is_some()
+    }
+
+    /// The schema's name when it is a `$ref` (directly or as the one
+    /// non-null alternative of an `allOf`, `oneOf` or `anyOf`).
+    fn ref_name(s: &Value) -> Option<&str> {
+        if let Some(r) = s.get("$ref").and_then(Value::as_str) {
+            return r.rsplit('/').next();
+        }
+        for key in ["allOf", "oneOf", "anyOf"] {
+            let parts: Vec<&Value> = s
+                .get(key)
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|p| p.get("type") != Some(&json!("null")))
+                .collect();
+            if let [one] = parts.as_slice() {
+                return Self::ref_name(one);
+            }
+        }
+        None
+    }
+
+    /// Every property of an object schema, each with the holder its rename
+    /// row is keyed by: the schema that declares it (through `allOf`), or
+    /// `holder` for an inline part.
+    fn properties<'a>(
+        &'a self,
+        s: &'a Value,
+        holder: &str,
+        out: &mut Vec<(String, String, &'a Value)>,
+    ) {
+        let (holder, s) = match Self::ref_name(s) {
+            Some(name) if s.get("$ref").is_some() => (name.to_owned(), self.resolve(s)),
+            _ => (holder.to_owned(), s),
+        };
+        for key in ["allOf", "oneOf", "anyOf"] {
+            for part in s.get(key).and_then(Value::as_array).into_iter().flatten() {
+                self.properties(part, &holder, out);
+            }
+        }
+        for (k, v) in s
+            .get("properties")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+        {
+            out.push((holder.clone(), k.clone(), v));
+        }
+    }
+
+    /// `v` (wire names) under the SDK names of the rename table, walking the
+    /// schema alongside. `holder` names an inline object (`Schema.field`).
+    fn to_sdk(&self, schema: &Value, v: &Value, holder: &str, geo: bool) -> Value {
+        let holder = Self::ref_name(schema).map_or_else(|| holder.to_owned(), str::to_owned);
+        let s = self.resolve(schema);
+        match v {
+            Value::Array(items) => {
+                let item_schema = self.item_schema(s);
+                Value::Array(
+                    items
+                        .iter()
+                        .map(|i| self.to_sdk(&item_schema, i, &holder, geo))
+                        .collect(),
+                )
+            }
+            Value::Object(map) => {
+                let mut props = Vec::new();
+                self.properties(s, &holder, &mut props);
+                let extra = s.get("additionalProperties").cloned().unwrap_or(json!({}));
+                let mut out = Map::new();
+                for (k, val) in map {
+                    let found = props.iter().find(|(_, name, _)| name == k);
+                    let (sdk, child, child_holder) = match found {
+                        Some((h, name, ps)) => {
+                            let sdk = if geo {
+                                None
+                            } else {
+                                self.renames.get(h).and_then(|row| row.get(name)).cloned()
+                            };
+                            (
+                                sdk.unwrap_or_else(|| k.clone()),
+                                (*ps).clone(),
+                                format!("{h}.{name}"),
+                            )
+                        }
+                        None => (k.clone(), extra.clone(), holder.clone()),
+                    };
+                    out.insert(sdk, self.to_sdk(&child, val, &child_holder, geo));
+                }
+                Value::Object(out)
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// The items schema of an array schema (through `allOf`, `oneOf` and
+    /// `anyOf`), or `{}`.
+    fn item_schema(&self, s: &Value) -> Value {
+        let s = self.resolve(s);
+        if let Some(items) = s.get("items") {
+            return items.clone();
+        }
+        for key in ["allOf", "oneOf", "anyOf"] {
+            for part in s.get(key).and_then(Value::as_array).into_iter().flatten() {
+                let items = self.item_schema(part);
+                if items != json!({}) {
+                    return items;
+                }
+            }
+        }
+        json!({})
+    }
+}
+
+fn ops_from_spec() -> Ops {
+    Ops {
+        spec: spec(),
+        renames: rename_table(),
     }
 }
 
 #[test]
 fn every_spec_operation_is_exposed_and_no_other() {
-    let ops = Ops { spec: spec() };
+    let ops = ops_from_spec();
     let spec_ids: BTreeSet<String> = ops
         .operations()
         .into_iter()
@@ -236,13 +429,15 @@ fn every_spec_operation_is_exposed_and_no_other() {
 
 #[test]
 fn response_examples_round_trip_without_losing_fields() {
-    let ops = Ops { spec: spec() };
+    let ops = ops_from_spec();
     let mut checked = 0;
     for (id, op) in ops.operations() {
         if OUT_OF_SCOPE.contains(&id.as_str()) {
             continue;
         }
-        let content = &op["responses"]["200"]["content"]["application/json"];
+        let content = Ops::response_content(&op);
+        let schema = content.get("schema").cloned().unwrap_or(json!({}));
+        let geo = Ops::is_geojson(&op);
         let mut examples: Vec<Value> = content.get("example").cloned().into_iter().collect();
         for (name, ex) in content
             .get("examples")
@@ -274,8 +469,9 @@ fn response_examples_round_trip_without_losing_fields() {
         for example in examples {
             let decoded =
                 round_trip(&id, example.clone()).unwrap_or_else(|e| panic!("{id} example: {e}"));
+            let want = ops.to_sdk(&schema, &example, "", geo);
             let mut missing = Vec::new();
-            missing_keys(&example, &decoded, &id, &mut missing);
+            missing_keys(&want, &decoded, &id, &mut missing);
             assert!(missing.is_empty(), "{id} example lost fields: {missing:?}");
             checked += 1;
         }
@@ -285,7 +481,7 @@ fn response_examples_round_trip_without_losing_fields() {
 
 #[test]
 fn the_models_have_every_property_of_every_reachable_schema() {
-    let ops = Ops { spec: spec() };
+    let ops = ops_from_spec();
     for (id, op) in ops.operations() {
         if OUT_OF_SCOPE.contains(&id.as_str()) {
             continue;
@@ -295,16 +491,64 @@ fn the_models_have_every_property_of_every_reachable_schema() {
         let full = ops.synthesise(&schema, 0);
         let decoded =
             round_trip(&id, full.clone()).unwrap_or_else(|e| panic!("{id}: {e}\n{full:#}"));
+        // The models serialise the SDK names: compare through the table.
+        let want = ops.to_sdk(&schema, &full, "", Ops::is_geojson(&op));
         let mut missing = Vec::new();
-        missing_keys(&full, &decoded, &id, &mut missing);
+        missing_keys(&want, &decoded, &id, &mut missing);
         assert!(missing.is_empty(), "{id}: the models lack {missing:?}");
         // And the reverse: a model field the spec does not have (a renamed or
-        // withdrawn one) fails too.
+        // withdrawn one, or a rename the table does not list) fails too.
         let mut extra = Vec::new();
-        missing_keys(&decoded, &full, &id, &mut extra);
+        missing_keys(&decoded, &want, &id, &mut extra);
         assert!(
             extra.is_empty(),
             "{id}: the models have fields the spec lacks: {extra:?}"
         );
+    }
+}
+
+#[test]
+fn every_rename_row_names_a_spec_field() {
+    let ops = ops_from_spec();
+    let schemas = &ops.spec["components"]["schemas"];
+    for (holder, row) in &ops.renames {
+        let (schema, field) = holder.split_once('.').unwrap_or((holder.as_str(), ""));
+        let mut s = ops.resolve(&schemas[schema]).clone();
+        if !field.is_empty() {
+            let mut props = Vec::new();
+            ops.properties(&s, schema, &mut props);
+            let (_, _, inline) = props
+                .iter()
+                .find(|(_, name, _)| name == field)
+                .unwrap_or_else(|| panic!("{holder}: no such field"));
+            let next = ops.resolve(inline).clone();
+            s = if next.get("items").is_some() {
+                ops.item_schema(&next)
+            } else {
+                next
+            };
+        }
+        let mut props = Vec::new();
+        ops.properties(&s, holder, &mut props);
+        for wire in row.keys() {
+            assert!(
+                props.iter().any(|(_, name, _)| name == wire),
+                "BEHAVIOR.md 3.0 renames {holder}.{wire}, which the spec does not have"
+            );
+        }
+    }
+}
+
+#[test]
+fn every_spec_error_code_is_known() {
+    let ops = ops_from_spec();
+    let codes = ops.spec["components"]["schemas"]["ErrorResponse"]["properties"]["error"]["enum"]
+        .as_array()
+        .expect("ErrorResponse.error is an enum");
+    for code in codes {
+        let code = code.as_str().unwrap();
+        let parsed = ErrorCode::from(code);
+        assert!(!parsed.is_unknown(), "ErrorCode lacks {code}");
+        assert!(parsed.category().is_some(), "{code} has no category");
     }
 }

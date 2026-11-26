@@ -184,6 +184,24 @@ fn route(req: &Request) -> Reply {
         }),
         ["catalog", "locations", _] => body("catalog-detail.json"),
         ["attribution"] => body("attribution.json"),
+        ["explore"] => body("explore.json"),
+        ["composition"] => body("composition.json"),
+        ["locations", _, _, "season"] => body("season.json"),
+        ["locations", _, _, "snowpack"] => body("snowpack.json"),
+        ["locations", _, _, "snowpack", "plume"] => body("snowpack-plume.json"),
+        ["locations", _, _, "snow-trend"] => {
+            if !keyed {
+                return error(
+                    403,
+                    "PLUS_REQUIRED",
+                    "The snow trend needs a Plus or Pro plan.",
+                );
+            }
+            body("snow-trend.json")
+        }
+        ["alerts", "outlines"] => body("alert-outlines.json"),
+        ["avalanche", "zones"] => body("avalanche-zones.json"),
+        ["runs"] => body("runs.json"),
         _ => return error(404, "NOT_FOUND", &format!("No route /api/v1/{}.", req.path)),
     };
     let Some(value) = value else {
