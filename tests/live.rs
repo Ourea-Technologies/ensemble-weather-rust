@@ -24,7 +24,7 @@ async fn anonymous_forecast_with_probabilities_and_totals() {
     assert_eq!(f.location.slug.as_deref(), Some("mt-hood-meadows"));
     assert_eq!(f.probabilities.len(), 1);
     assert_eq!(f.window_totals.len(), 1);
-    assert!(!f.series.timeseries.is_empty());
+    assert!(!f.series.timeseries.is_empty(), "no hours served");
 }
 
 #[tokio::test]
@@ -39,7 +39,7 @@ async fn keyed_calls_and_open_routes() {
     let _ = client.attribution().await.unwrap();
     let _ = client.runs().limit(1).await.unwrap();
     let page = client.catalog_locations().limit(5).await.unwrap();
-    assert!(!page.items.is_empty());
+    assert!(!page.items.is_empty(), "an empty catalog page");
     let missing = client
         .forecast("or/no-such-place-anywhere")
         .await
@@ -64,7 +64,7 @@ async fn the_routes_added_in_0_1_0() {
         .near(45.33, -121.66)
         .await
         .unwrap();
-    assert!(!sorted.items.is_empty());
+    assert!(!sorted.items.is_empty(), "no sorted hits");
     let composition = client.composition().await.unwrap();
     assert!(composition.total_members > 0);
     let season = client.season("or/mt-hood-meadows").await.unwrap();
@@ -91,7 +91,7 @@ async fn the_routes_added_in_0_1_0() {
     // The snow trend needs Plus or Pro; the CI key's plan decides which
     // answer is right, and either is a typed result.
     match client.snow_trend("or/mt-hood-meadows").await {
-        Ok(trend) => assert!(!trend.dates.is_empty()),
+        Ok(trend) => assert!(!trend.dates.is_empty(), "a snow trend with no dates"),
         Err(e) => assert_eq!(e.category(), Category::Permission),
     }
 }

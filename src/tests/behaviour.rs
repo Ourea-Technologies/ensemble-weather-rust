@@ -250,7 +250,7 @@ async fn usage_errors_are_raised_before_sending() {
     for e in cases {
         assert_eq!(e.category(), Category::Usage, "{e}");
     }
-    assert!(mock.requests().is_empty());
+    assert!(mock.requests().is_empty(), "a usage error sent a request");
     assert!(
         Client::builder()
             .base_url("ftp://nope")
@@ -404,7 +404,11 @@ async fn a_partial_answer_is_an_error_and_no_answer_stays_empty() {
         ))
         .await
         .unwrap();
-    assert!(f.probabilities.is_empty());
+    assert!(
+        f.probabilities.is_empty(),
+        "no answers: {:?}",
+        f.probabilities
+    );
 
     let mut body: serde_json::Value = serde_json::from_str(FORECAST).unwrap();
     body["probabilities"] = serde_json::json!([{
