@@ -7,8 +7,9 @@ use std::time::Duration;
 use super::mock::MockTransport;
 use crate::error::ConnectionErrorKind;
 use crate::{
-    Category, Chance, Client, Error, ErrorCode, LocationType, NullReason, Point, StationNetwork,
-    StationStatus, TemplateVariant, Threshold, Total, Units, Variable, Window,
+    AlertClass, Category, Chance, Client, Error, ErrorCode, ExploreMetric, ExplorePoints,
+    LocationType, Members, NullReason, Order, Point, StationNetwork, StationStatus,
+    TemplateVariant, Threshold, Total, Units, Variable, Window,
 };
 
 const FORECAST: &str = include_str!("../../spec/vectors/bodies/forecast-metric.json");
@@ -32,7 +33,7 @@ async fn every_operation_sends_its_canonical_url() {
     let mock = MockTransport::new();
     let c = build(client(&mock).api_key("ow_k"));
     let ok = "{}";
-    for _ in 0..40 {
+    for _ in 0..60 {
         mock.push_json(ok);
     }
     let p = Point::new(45.0, -121.5);
@@ -101,6 +102,49 @@ async fn every_operation_sends_its_canonical_url() {
         .get_point_forecast(Point::new(45.3311, -121.6649).elevation_m(1661.0))
         .include(["skin_temperature", "mslp", "mslp"])
         .await;
+    let _ = c
+        .forecast("or/mt-hood-meadows")
+        .members(true)
+        .exclude_sources(["raws", "asos", "raws"])
+        .elevations(["summit", "base"])
+        .await;
+    let _ = c
+        .forecast("or/mt-hood-meadows")
+        .members(Members::Plume)
+        .members(false)
+        .await;
+    let _ = c
+        .search("hood")
+        .sort(ExploreMetric::Snow5d)
+        .order(Order::Asc)
+        .near(45.0, -121.5)
+        .radius_km(100.0)
+        .units(Units::Imperial)
+        .await;
+    let _ = c
+        .explore(ExploreMetric::BaseDepth)
+        .state("WA")
+        .kind(LocationType::SkiArea)
+        .order(Order::Desc)
+        .points(ExplorePoints::All)
+        .limit(25)
+        .radius_km(100.0)
+        .await;
+    let _ = c.composition().await;
+    let _ = c.season("or/mt-hood-meadows").water_year(2027).await;
+    let _ = c.snow_trend("or/mt-hood-meadows").elevation("summit").await;
+    let _ = c
+        .snowpack("or/mt-hood-meadows")
+        .units(Units::Imperial)
+        .await;
+    let _ = c.snowpack_plume("or/mt-hood-meadows").await;
+    let _ = c
+        .alert_outlines()
+        .classes([AlertClass::Winter, AlertClass::Wind])
+        .bbox(-125.5, 41.0, -116.0, 49.25)
+        .await;
+    let _ = c.avalanche_zones().await;
+    let _ = c.runs().cursor("next").await;
     let base = "https://api.example.test/api/v1";
     let want = [
         "/locations/or/mt-hood-meadows/current?include=nowcast_hours&units=imperial",
@@ -113,14 +157,26 @@ async fn every_operation_sends_its_canonical_url() {
         "/locations",
         "/locations/or?cursor=x&limit=100&type=summit",
         "/catalog/locations?admin1=US-OR&country=US&template=mountain&type=ski_area",
-        "/catalog/locations/mt-hood-meadows?include=template%2Ccontent",
-        "/catalog/stations?capability=snow_depth%2Cswe&limit=50&network=raws%2Csnotel&status=active",
+        "/catalog/locations/mt-hood-meadows?include=content,template",
+        "/catalog/stations?capability=snow_depth,swe&limit=50&network=raws,snotel&status=active",
         "/catalog/stations/a-station?locale=es",
         "/runs",
         "/runs?limit=3",
         "/attribution",
-        "/locations/or/mt-hood-meadows?diagnostics=provenance&elevations=all&max_days=7&run=2026-11-15T00%3A00%3A00Z&sources=snotel%2Cmesonet",
-        "/forecast?elevation_m=1661&include=mslp%2Cskin_temperature&lat=45.3311&lon=-121.6649",
+        "/locations/or/mt-hood-meadows?diagnostics=provenance&elevations=all&max_days=7&run=2026-11-15T00%3A00%3A00Z&sources=mesonet,snotel",
+        "/forecast?elevation_m=1661&include=mslp,skin_temperature&lat=45.3311&lon=-121.6649",
+        "/locations/or/mt-hood-meadows?elevations=base,summit&exclude_sources=asos,raws&members=true",
+        "/locations/or/mt-hood-meadows",
+        "/search/locations?near=45,-121.5&order=asc&q=hood&sort=snow_5d&units=imperial",
+        "/explore?metric=base_depth&points=all&state=wa&type=ski_area",
+        "/composition",
+        "/locations/or/mt-hood-meadows/season?water_year=2027",
+        "/locations/or/mt-hood-meadows/snow-trend?elevation=summit",
+        "/locations/or/mt-hood-meadows/snowpack?units=imperial",
+        "/locations/or/mt-hood-meadows/snowpack/plume",
+        "/alerts/outlines?bbox=-125.5,41,-116,49.25&class=wind,winter",
+        "/avalanche/zones",
+        "/runs?cursor=next",
     ];
     let urls = mock.urls();
     assert_eq!(urls.len(), want.len());
@@ -137,7 +193,8 @@ async fn every_operation_sends_its_canonical_url() {
         keyed,
         [
             true, true, true, true, true, true, false, true, true, true, false, true, false, true,
-            true, false, true, true
+            true, false, true, true, true, true, false, true, false, true, true, true, true, true,
+            true, true
         ]
     );
 }
@@ -170,6 +227,25 @@ async fn usage_errors_are_raised_before_sending() {
             )
             .await
             .unwrap_err(),
+        c.explore(ExploreMetric::Snow5d)
+            .near(91.0, -121.0)
+            .await
+            .unwrap_err(),
+        c.search("hood").near(45.0, f64::NAN).await.unwrap_err(),
+        c.alert_outlines()
+            .bbox(-116.0, 41.0, -125.0, 49.0)
+            .await
+            .unwrap_err(),
+        c.alert_outlines()
+            .bbox(-125.0, 49.0, -116.0, 41.0)
+            .await
+            .unwrap_err(),
+        c.alert_outlines()
+            .bbox(-190.0, 41.0, -116.0, 49.0)
+            .await
+            .unwrap_err(),
+        c.season("no-slash").await.unwrap_err(),
+        "sometimes".parse::<Members>().unwrap_err(),
     ];
     for e in cases {
         assert_eq!(e.category(), Category::Usage, "{e}");
@@ -374,8 +450,8 @@ async fn a_partial_answer_is_an_error_and_no_answer_stays_empty() {
         ))
         .await
         .unwrap();
-    assert_eq!(f.probabilities[0].probability, Some(0.5));
-    assert_eq!(f.probabilities[1].probability, None);
+    assert_eq!(f.probabilities[0].value, Some(0.5));
+    assert_eq!(f.probabilities[1].value, None);
     assert_eq!(
         f.probabilities[1].null_reason,
         Some(NullReason::WindowNotCovered)

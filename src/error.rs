@@ -36,7 +36,8 @@ pub enum Error {
     /// The API key is missing or invalid (401).
     #[error("authentication failed: {0}")]
     Authentication(Box<ApiError>),
-    /// The key's plan does not allow the request (403), such as `PRO_REQUIRED`.
+    /// The key's plan does not allow the request (403), such as `PRO_REQUIRED`
+    /// or `PLUS_REQUIRED`.
     #[error("permission denied: {0}")]
     Permission(Box<ApiError>),
     /// The location or resource does not exist (404, 410).
@@ -448,6 +449,8 @@ string_enum! {
         Unauthorized => "UNAUTHORIZED",
         /// The request needs a Pro key.
         ProRequired => "PRO_REQUIRED",
+        /// The request needs a Plus or Pro plan (the snow trend).
+        PlusRequired => "PLUS_REQUIRED",
         /// The named location does not exist.
         LocationNotFound => "LOCATION_NOT_FOUND",
         /// The resource does not exist.
@@ -484,7 +487,7 @@ impl ErrorCode {
     pub fn category(&self) -> Option<Category> {
         Some(match self {
             Self::InvalidApiKey | Self::Unauthorized => Category::Authentication,
-            Self::ProRequired => Category::Permission,
+            Self::ProRequired | Self::PlusRequired => Category::Permission,
             Self::LocationNotFound | Self::NotFound => Category::NotFound,
             Self::BadRequest
             | Self::InvalidCoordinates

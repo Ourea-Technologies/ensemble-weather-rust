@@ -25,7 +25,7 @@ async fn main() -> Result<(), ensemble_weather::Error> {
     for c in &forecast.probabilities {
         let unit = c.threshold_unit.map_or("", |u| u.symbol());
         let window = format!("{}-{} h", c.window_start_hours, c.window_end_hours);
-        match c.probability {
+        match c.value {
             Some(p) => println!(
                 "{} {} {} {unit} ({}) over {window}: {:.0}% of {} members",
                 c.variable,

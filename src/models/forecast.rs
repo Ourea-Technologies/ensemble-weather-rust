@@ -5,12 +5,12 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::enums::{
-    ClampedOption, Condition, ConditionIcon, ElevationSource, FreezingLevelKind, GapFlowStatus,
-    InversionKind, MembersView, MoonPhase, NowcastSource, NullReason, PrecipKind, Season,
-    StormOrientation, WindStatus,
+    AstronomicalSeason, ClampedOption, Condition, ConditionIcon, ElevationSource,
+    FreezingLevelKind, GapFlowStatus, InversionKind, LocationType, MembersView, MoonPhase,
+    NowcastSource, NullReason, PrecipKind, SnowCharacter, StormOrientation, WindStatus,
 };
 use crate::meta::{ResponseMeta, with_meta};
-use crate::models::{CurrentConditions, LocationRef, ResponseAttribution};
+use crate::models::{CurrentConditions, ElevationSummary, MemberPlume, ResponseAttribution};
 use crate::probability::{Aggregation, Op, Variable};
 use crate::units::{Unit, Units};
 
@@ -124,11 +124,16 @@ impl fmt::Display for Interval {
 /// # async fn run() -> Result<(), ensemble_weather::Error> {
 /// let client = ensemble_weather::Client::new()?;
 /// let forecast = client.forecast("or/mt-hood-meadows").await?;
-/// for hour in &forecast.forecast.timeseries {
+/// for hour in &forecast.series.timeseries {
 ///     println!("{} {:?}", hour.valid_time, hour.ensemble.temperature.range80());
 /// }
 /// # Ok(()) }
 /// ```
+///
+/// Two fields carry SDK names (BEHAVIOR.md 3.0, no stutter): `series` is the
+/// JSON `forecast` and `elevations` the JSON `elevation_forecasts`. Every
+/// model decodes the wire names and serialises the SDK names (which it
+/// decodes too), so a serialised value reads back.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Forecast {
@@ -148,17 +153,23 @@ pub struct Forecast {
     pub window_totals: Vec<WindowTotal>,
     /// The options the server clamped to the caller's tier.
     pub applied: Option<AppliedOptions>,
-    /// The location.
-    pub location: LocationRef,
+    /// The location, with the elevation served.
+    pub location: ForecastLocation,
     /// The model run behind the forecast.
     pub model_run: ModelRunInfo,
     /// The unit system of every value in this response.
     pub units: Units,
-    /// The hourly series and daily summaries.
-    pub forecast: ForecastData,
-    /// Forecasts at the location's extra elevations, when asked for.
-    #[serde(default)]
-    pub elevation_forecasts: Vec<ElevationForecast>,
+    /// (JSON `forecast`) The hourly series and daily summaries.
+    #[serde(rename(deserialize = "forecast"), alias = "series")]
+    pub series: ForecastData,
+    /// (JSON `elevation_forecasts`) Forecasts at the location's extra
+    /// elevations, when asked for.
+    #[serde(
+        default,
+        rename(deserialize = "elevation_forecasts"),
+        alias = "elevations"
+    )]
+    pub elevations: Vec<ElevationForecast>,
     /// Whether the live nowcast layer is baked in.
     pub nowcast_applied: bool,
     /// Live inputs this response was built without.
@@ -175,8 +186,109 @@ pub struct Forecast {
     pub point: Option<PointInfo>,
     /// Current conditions, when the response carries them.
     pub current: Option<CurrentConditions>,
+    /// The avalanche center's danger rating for the zone the point is in.
+    pub avalanche: Option<AvalancheForecast>,
+    /// What the snowpack model (beta) states is on the ground now.
+    pub snow_on_ground: Option<SnowOnGround>,
     /// The data sources; carry `credit` with redistributed output.
     pub attribution: ResponseAttribution,
+}
+
+/// A forecast's location: the named location (or the point of a coordinate
+/// request), the elevation the forecast is served at, and its other
+/// elevation points.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ForecastLocation {
+    /// The location's slug, unique within its state; `None` for a coordinate
+    /// request that matched no named location.
+    pub slug: Option<String>,
+    /// The state, as a lowercase USPS code.
+    pub state: String,
+    /// The display name.
+    pub name: String,
+    /// Latitude, decimal degrees.
+    pub lat: f64,
+    /// Longitude, decimal degrees (west negative).
+    pub lon: f64,
+    /// Elevation in metres, whatever the request's units.
+    pub elevation_m: f64,
+    /// The kind of location; `None` when `slug` is.
+    #[serde(rename = "type")]
+    pub kind: Option<LocationType>,
+    /// The IANA timezone, such as `"America/Los_Angeles"`.
+    pub timezone: String,
+    /// The elevation the series is served at, in the request's length unit.
+    pub elevation: f64,
+    /// The location's elevation points, the primary first (named locations
+    /// with more than one).
+    #[serde(default)]
+    pub elevations: Vec<ElevationSummary>,
+}
+
+impl ForecastLocation {
+    /// The `"state/slug"` form the location methods take; `None` for a
+    /// coordinate request's point.
+    #[must_use]
+    pub fn key(&self) -> Option<String> {
+        self.slug
+            .as_ref()
+            .map(|slug| format!("{}/{slug}", self.state))
+    }
+}
+
+/// The avalanche center's danger rating for the forecast zone a location's
+/// point is in, from avalanche.org's public map layer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct AvalancheForecast {
+    /// The avalanche center's short ID.
+    pub center_id: String,
+    /// The center's name.
+    pub center_name: String,
+    /// avalanche.org's ID for the forecast zone.
+    pub zone_id: i64,
+    /// The zone's name.
+    pub zone_name: String,
+    /// The North American Public Avalanche Danger Scale level, 1-5; present
+    /// only when `status` is `rated`.
+    pub danger_level: Option<u32>,
+    /// The scale's English name for `danger_level`; `None` exactly when
+    /// `danger_level` is.
+    pub danger_label: Option<String>,
+    /// `rated` for a current rating; other values say why there is none.
+    pub status: String,
+    /// When the center's current product took effect (RFC 3339), when stated.
+    pub valid_from: Option<String>,
+    /// When the center's current product expires (RFC 3339), when stated.
+    pub valid_until: Option<String>,
+    /// (JSON `forecast_url`) The center's full forecast for the zone.
+    #[serde(rename(deserialize = "forecast_url"), alias = "url")]
+    pub url: String,
+    /// The center's site.
+    pub center_url: String,
+    /// The credit to show with the rating.
+    pub attribution: String,
+}
+
+/// What the snowpack model (beta) states is on the ground at a spot at one
+/// hour.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SnowOnGround {
+    /// Always `true` while the product is a beta; fields may be added.
+    pub beta: bool,
+    /// Snow depth: cm, or in (imperial).
+    pub depth: f64,
+    /// `measured`: the run started from a snow-depth sensor at the spot.
+    pub basis: String,
+    /// The surface class at the hour (an open set; the snowpack route's
+    /// `definitions.surface` has the text of each).
+    pub surface: Option<String>,
+    /// The hour the depth is for (RFC 3339).
+    pub valid_time: String,
+    /// When the snowpack run that produced it finished (RFC 3339).
+    pub generated_at: String,
 }
 
 /// One probability term, answered, with its reference class: the variable,
@@ -206,9 +318,11 @@ pub struct ProbabilityResult {
     pub from: Option<String>,
     /// The window's exclusive end (RFC 3339); `None` when not covered.
     pub to: Option<String>,
-    /// The share of members meeting the term, 0..1. `None` when the server
-    /// could not answer (see `null_reason`): absent, never 0.
-    pub probability: Option<f64>,
+    /// (JSON `probability`) The share of members meeting the term, 0..1.
+    /// `None` when the server could not answer (see `null_reason`): absent,
+    /// never 0.
+    #[serde(rename(deserialize = "probability"), alias = "value")]
+    pub value: Option<f64>,
     /// The number of members that voted.
     pub members: u32,
     /// Why `probability` is `None`; `None` when it is set.
@@ -227,10 +341,12 @@ pub struct WindowTotal {
     /// The quantiles' unit (set by the SDK from the response's units).
     #[serde(skip)]
     pub unit: Option<Unit>,
-    /// The window's first hour.
-    pub window_start_hours: u32,
-    /// The window's end hour.
-    pub window_end_hours: u32,
+    /// (JSON `window_start_hours`) The window's first hour.
+    #[serde(rename(deserialize = "window_start_hours"), alias = "start_hours")]
+    pub start_hours: u32,
+    /// (JSON `window_end_hours`) The window's end hour.
+    #[serde(rename(deserialize = "window_end_hours"), alias = "end_hours")]
+    pub end_hours: u32,
     /// How each member's hours were combined (`total` for precipitation and
     /// snowfall).
     pub aggregation: Aggregation,
@@ -245,6 +361,9 @@ pub struct WindowTotal {
     pub members: u32,
     /// Why `quantiles` is `None`; `None` when it is set.
     pub null_reason: Option<NullReason>,
+    /// How the distribution was computed: `"members"` (from each member's
+    /// own total) or `"ensemble_moments"`; `None` with no distribution.
+    pub method: Option<String>,
 }
 
 /// The fixed thresholds behind the hourly and daily probabilities, in the
@@ -257,12 +376,23 @@ pub struct ProbabilityThresholds {
     pub hourly_precipitation: f64,
     /// Behind each hour's snowfall probability.
     pub hourly_snowfall: f64,
-    /// Behind each day's `precipitation_probability`.
-    pub daily_precipitation_probability: f64,
-    /// Behind each day's `precipitation_occurrence_probability`.
-    pub daily_precipitation_occurrence_probability: f64,
-    /// Behind each day's `snow_probability`.
-    pub daily_snow_probability: f64,
+    /// (JSON `daily_precipitation_probability`) Behind each day's
+    /// `precipitation_probability`.
+    #[serde(
+        rename(deserialize = "daily_precipitation_probability"),
+        alias = "daily_precipitation"
+    )]
+    pub daily_precipitation: f64,
+    /// (JSON `daily_precipitation_occurrence_probability`) Behind each day's
+    /// `precipitation_occurrence_probability`.
+    #[serde(
+        rename(deserialize = "daily_precipitation_occurrence_probability"),
+        alias = "daily_precipitation_occurrence"
+    )]
+    pub daily_precipitation_occurrence: f64,
+    /// (JSON `daily_snow_probability`) Behind each day's `snow_probability`.
+    #[serde(rename(deserialize = "daily_snow_probability"), alias = "daily_snow")]
+    pub daily_snow: f64,
 }
 
 /// The horizon actually served.
@@ -357,6 +487,13 @@ pub struct ModelEntry {
     pub cycle: Option<String>,
     /// The model's member count.
     pub members: Option<u32>,
+    /// The members shown in the plume (the model's display set), when it
+    /// shows fewer than it has.
+    #[serde(default)]
+    pub display_members: Vec<u32>,
+    /// `"borrowed_from_deterministic"` when the shown members' snowfall is
+    /// the deterministic run's.
+    pub display_members_snowfall: Option<String>,
 }
 
 /// The hourly series and daily summaries.
@@ -368,7 +505,8 @@ pub struct ForecastData {
     /// The spacing of the series, hours.
     pub interval_hours: u32,
     /// The hourly series, from the current hour (or the run's init with
-    /// `include_past`).
+    /// `include_past`). Empty with `members=plume`, which serves `plume`
+    /// instead.
     #[serde(default)]
     pub timeseries: Vec<TimeSeriesPoint>,
     /// The daily summaries, one per local date.
@@ -376,6 +514,27 @@ pub struct ForecastData {
     pub daily: Vec<DailyForecast>,
     /// Snow totals for common display windows.
     pub snow_outlook: Option<SnowOutlook>,
+    /// Liquid-equivalent totals over the same windows as `snow_outlook`.
+    pub precipitation_outlook: Option<PrecipOutlook>,
+    /// The members in columns (with [`Members::Plume`](crate::Members::Plume)).
+    pub plume: Option<MemberPlume>,
+}
+
+/// Liquid-equivalent totals for common display windows, as the server
+/// computes them (sums of the hourly means; `None` when not covered).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct PrecipOutlook {
+    /// The next 24 hours.
+    pub next_24h: Option<f64>,
+    /// The next 48 hours.
+    pub next_48h: Option<f64>,
+    /// The next 72 hours.
+    pub next_72h: Option<f64>,
+    /// The next 7 days.
+    pub next_7d: Option<f64>,
+    /// The distributions of each member's own window total.
+    pub quantiles: Option<SnowOutlookQuantiles>,
 }
 
 /// Snow totals for common display windows, as the server computes them.
@@ -389,6 +548,8 @@ pub struct SnowOutlook {
     pub next_24h: Option<f64>,
     /// The next 48 hours.
     pub next_48h: Option<f64>,
+    /// The next 72 hours.
+    pub next_72h: Option<f64>,
     /// The next 7 days.
     pub next_7d: Option<f64>,
     /// Tonight, 4 pm to 9 am.
@@ -405,6 +566,8 @@ pub struct SnowOutlookQuantiles {
     pub next_24h: Option<Quantiles>,
     /// The next 48 hours.
     pub next_48h: Option<Quantiles>,
+    /// The next 72 hours.
+    pub next_72h: Option<Quantiles>,
     /// The next 7 days.
     pub next_7d: Option<Quantiles>,
 }
@@ -419,6 +582,9 @@ pub struct TimeSeriesPoint {
     pub lead_time_hours: i32,
     /// Whether the hour is at night.
     pub is_night: bool,
+    /// Whether precipitation was measured in this hour: a radar accumulation
+    /// was published for this clock hour and its precipitation is that.
+    pub measured: bool,
     /// The condition code.
     pub condition: Condition,
     /// The condition, for display.
@@ -445,10 +611,51 @@ pub struct TimeSeriesPoint {
     pub members: Vec<ModelMembers>,
     /// The distributions of the members' running totals (with `members`).
     pub members_cumulative: Option<MembersCumulative>,
+    /// The members' spread at this hour (with `members`).
+    pub members_spread: Option<MembersSpread>,
+    /// The distributions of the members' 6-hour totals ending at this hour
+    /// (with `members`, at 00/06/12/18Z).
+    pub members_6h: Option<MembersCumulative>,
     /// The server's running total of hourly precipitation means.
     pub cumulative_precipitation: Option<f64>,
     /// The server's running total of hourly snowfall means.
     pub cumulative_snowfall: Option<f64>,
+    /// The character of the hour's snow, when it snows.
+    pub snow_character: Option<SnowCharacter>,
+    /// The hour's mean precipitation split by phase.
+    pub precipitation_by_type: Option<PrecipitationByType>,
+}
+
+/// The members' spread at an hour for the plume's instantaneous variables.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct MembersSpread {
+    /// Temperature.
+    pub temperature: Option<MemberQuantiles>,
+    /// Snow level.
+    pub snow_level: Option<MemberQuantiles>,
+    /// Snow level on the NWS (wet-bulb) scale.
+    pub snow_level_wet_bulb: Option<MemberQuantiles>,
+    /// Snow-to-liquid ratio over the members snowing at this hour.
+    pub slr: Option<MemberQuantiles>,
+    /// Wind speed.
+    pub wind_speed: Option<MemberQuantiles>,
+}
+
+/// An hour's mean precipitation split by phase, in the precipitation unit;
+/// the four add up to the hour's mean (to the served precision).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct PrecipitationByType {
+    /// Rain.
+    pub rain: f64,
+    /// The liquid that falls as snow (not snow depth: that is
+    /// `ensemble.snowfall`).
+    pub snow: f64,
+    /// A rain and snow mix.
+    pub rain_snow_mix: f64,
+    /// Liquid that freezes on contact.
+    pub freezing_rain: f64,
 }
 
 /// The post-processing rules that shaped each variable this hour. A research
@@ -542,9 +749,9 @@ pub struct CircularStats {
 pub struct ModelMembers {
     /// The model's ID.
     pub id: String,
-    /// One entry per member.
-    #[serde(default)]
-    pub members: Vec<MemberForecast>,
+    /// (JSON `members`) One entry per member.
+    #[serde(default, rename(deserialize = "members"), alias = "items")]
+    pub items: Vec<MemberForecast>,
 }
 
 /// One ensemble member's values at an hour. The plume view (Free) withholds
@@ -552,8 +759,9 @@ pub struct ModelMembers {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct MemberForecast {
-    /// The member's index within its model.
-    pub member_id: u32,
+    /// (JSON `member_id`) The member's index within its model.
+    #[serde(rename(deserialize = "member_id"), alias = "id")]
+    pub id: u32,
     /// This member's temperature.
     pub temperature: Option<f64>,
     /// This member's precipitation.
@@ -566,6 +774,8 @@ pub struct MemberForecast {
     pub wind_direction: Option<f64>,
     /// This member's snow level.
     pub snow_level: Option<f64>,
+    /// This member's snow level on the NWS (wet-bulb) scale.
+    pub snow_level_wet_bulb: Option<f64>,
     /// This member's snow-to-liquid ratio.
     pub slr: Option<f64>,
     /// This member's snowfall.
@@ -576,14 +786,59 @@ pub struct MemberForecast {
     pub cumulative_snowfall: Option<f64>,
 }
 
-/// The distributions of the members' running totals.
+/// The distributions of the members' running (or 6-hour) totals.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct MembersCumulative {
     /// Precipitation.
-    pub precipitation: Option<Quantiles>,
+    pub precipitation: Option<MemberQuantiles>,
     /// Snowfall.
-    pub snowfall: Option<Quantiles>,
+    pub snowfall: Option<MemberQuantiles>,
+}
+
+/// A distribution over the ensemble members: the [`Quantiles`] shape, with
+/// every statistic but `p50` and `probability` always set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct MemberQuantiles {
+    /// The members' mean.
+    pub mean: f64,
+    /// The 10th percentile.
+    pub p10: f64,
+    /// The 25th percentile.
+    pub p25: f64,
+    /// The members' median.
+    pub p50: Option<f64>,
+    /// The 75th percentile.
+    pub p75: f64,
+    /// The 90th percentile.
+    pub p90: f64,
+    /// The lowest member.
+    pub min: f64,
+    /// The highest member.
+    pub max: f64,
+    /// The chance of occurrence, 0..1, where the use says.
+    pub probability: Option<f64>,
+}
+
+impl MemberQuantiles {
+    /// The central 80 % range, p10 to p90, as the server sent it.
+    #[must_use]
+    pub fn range80(&self) -> Interval {
+        Interval {
+            low: self.p10,
+            high: self.p90,
+        }
+    }
+
+    /// The central 50 % range, p25 to p75, as the server sent it.
+    #[must_use]
+    pub fn range50(&self) -> Interval {
+        Interval {
+            low: self.p25,
+            high: self.p75,
+        }
+    }
 }
 
 /// A detected temperature inversion or cold pool.
@@ -631,6 +886,8 @@ pub struct EnsembleStats {
     pub wind_direction: CircularStats,
     /// The snow level distribution.
     pub snow_level: Option<Quantiles>,
+    /// The snow level on the NWS scale (the height of the 0.5 °C wet-bulb).
+    pub snow_level_wet_bulb: Option<Quantiles>,
     /// The snow-to-liquid ratio distribution.
     pub slr: Option<Quantiles>,
     /// The snowfall distribution.
@@ -682,6 +939,8 @@ pub struct ModelMean {
     pub wind_direction: Option<CircularStats>,
     /// The snow level distribution.
     pub snow_level: Option<Quantiles>,
+    /// The snow level on the NWS (wet-bulb) scale.
+    pub snow_level_wet_bulb: Option<Quantiles>,
     /// The snow-to-liquid ratio distribution.
     pub slr: Option<Quantiles>,
     /// The snowfall distribution.
@@ -744,6 +1003,89 @@ pub struct DailyForecast {
     pub astro: DailyAstro,
     /// The date's temperature climatology.
     pub temperature_climatology: Option<DayClimatology>,
+    /// For today's row, the instant from which the day totals are forecast
+    /// (RFC 3339); earlier hours are measured (`measured_precipitation`).
+    pub covered_from: Option<String>,
+    /// The precipitation measured so far today, when any is.
+    pub measured_precipitation: Option<MeasuredPrecipitation>,
+    /// The character of the day's snow, when it snows.
+    pub snow_character: Option<SnowCharacter>,
+    /// The day's snow-to-liquid ratio.
+    pub slr: Option<f64>,
+    /// The snow level over the day's wet hours.
+    pub snow_level_range: Option<SnowLevelRange>,
+    /// The day's snow level on the NWS (wet-bulb) scale.
+    pub snow_level_wet_bulb: Option<Quantiles>,
+    /// The wet-bulb snow level over the day's wet hours.
+    pub snow_level_wet_bulb_range: Option<SnowLevelRange>,
+    /// The day's climate normal at the forecast point.
+    pub normal: Option<DayNormal>,
+    /// The served headline minus the normal.
+    pub departure: Option<DayDeparture>,
+    /// Where the served headline falls in the date's climatology.
+    pub percentile: Option<DayPercentile>,
+}
+
+/// The precipitation measured so far on a day.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct MeasuredPrecipitation {
+    /// The amount, in the precipitation unit.
+    pub amount: f64,
+    /// Measured through this instant (RFC 3339).
+    pub through: String,
+}
+
+/// A day's snow level over its wet hours, in the length unit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SnowLevelRange {
+    /// The lowest hourly snow level among the wet hours.
+    pub low: f64,
+    /// The highest hourly snow level among the wet hours.
+    pub high: f64,
+    /// The wet hours' snow level, weighted by their precipitation.
+    pub mean: f64,
+}
+
+/// A day's climate normal at the forecast point, in the request's units.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DayNormal {
+    /// The mean local-calendar-day maximum temperature.
+    pub high: Option<f64>,
+    /// The mean local-calendar-day minimum temperature.
+    pub low: Option<f64>,
+    /// The mean local-calendar-day precipitation, dry days included.
+    pub precipitation: Option<f64>,
+    /// A climatology station's own record, or the ERA5 cell of the point.
+    pub source: String,
+    /// The distance from the point to the station (or cell centre), km.
+    pub distance_km: f64,
+}
+
+/// The served headline minus the normal: `high.p50 - normal.high` and
+/// `low.p50 - normal.low`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DayDeparture {
+    /// The high's departure.
+    pub high: Option<f64>,
+    /// The low's departure.
+    pub low: Option<f64>,
+}
+
+/// Where the served headline (`p50`) falls in the date's climatological
+/// distribution, as a percentile 0-100.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DayPercentile {
+    /// The high's percentile.
+    pub high: Option<f64>,
+    /// The low's percentile.
+    pub low: Option<f64>,
+    /// The precipitation's percentile.
+    pub precipitation: Option<f64>,
 }
 
 /// A day's precipitation headline, for display.
@@ -756,6 +1098,8 @@ pub struct PrecipDisplay {
     pub chance: f64,
     /// The amount.
     pub amount: Option<f64>,
+    /// The day's snowfall headline, in the snowfall unit.
+    pub snow_amount: Option<f64>,
 }
 
 /// A day's wind, from gusts when available.
@@ -787,7 +1131,7 @@ pub struct DailyAstro {
     /// The lit fraction, 0..1.
     pub moon_illumination: f64,
     /// The astronomical season.
-    pub astronomical_season: Season,
+    pub astronomical_season: AstronomicalSeason,
 }
 
 /// A date's temperature climatology.
@@ -805,10 +1149,14 @@ pub struct DayClimatology {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ElevationForecast {
-    /// The elevation's name.
+    /// The elevation's name (pass it to
+    /// [`ForecastRequest::elevations`](crate::ForecastRequest::elevations)).
     pub name: String,
-    /// The elevation, in the request's length unit.
-    pub elevation: f64,
+    /// What the elevation is called, for display.
+    pub display_name: Option<String>,
+    /// (JSON `elevation`) The elevation, in the request's length unit.
+    #[serde(rename(deserialize = "elevation"), alias = "height")]
+    pub height: f64,
     /// The latitude.
     pub lat: f64,
     /// The longitude.
@@ -821,6 +1169,15 @@ pub struct ElevationForecast {
     pub daily: Vec<DailyForecast>,
     /// Snow totals.
     pub snow_outlook: Option<SnowOutlook>,
+    /// Liquid-equivalent totals.
+    pub precipitation_outlook: Option<PrecipOutlook>,
+    /// The members in columns (with [`Members::Plume`](crate::Members::Plume)).
+    pub plume: Option<MemberPlume>,
+    /// Observation sensors near this elevation's point.
+    #[serde(default)]
+    pub nearest_sensors: Vec<NearestSensor>,
+    /// What the snowpack model (beta) states is on the ground here now.
+    pub snow_on_ground: Option<SnowOnGround>,
 }
 
 with_meta!(Forecast);

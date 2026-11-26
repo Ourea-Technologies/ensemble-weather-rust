@@ -10,16 +10,21 @@ use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 
 use crate::client::{Client, Operation};
-use crate::enums::{LocationType, StationNetwork, StationStatus, TemplateVariant};
+use crate::enums::{
+    AlertClass, ExploreMetric, ExplorePoints, LocationType, Order, StationNetwork, StationStatus,
+    TemplateVariant,
+};
 use crate::error::{Error, Result};
 use crate::models::{
-    Alerts, Attribution, CatalogLocation, CatalogLocationDetail, CatalogLocationPage,
-    CatalogStation, CatalogStationDetail, CatalogStationPage, Current, Forecast, LocationRef,
-    LocationSummary, LocationsPage, NearbyLocations, NearbyPoint, Runs, SearchResults,
+    AlertOutlines, Alerts, Attribution, AvailableRun, AvalancheZones, CatalogLocation,
+    CatalogLocationDetail, CatalogLocationPage, CatalogStation, CatalogStationDetail,
+    CatalogStationPage, Composition, Current, ExploreItem, ExplorePage, Forecast, ForecastLocation,
+    LocationRef, LocationSummary, LocationsPage, NearbyLocations, NearbyPoint, Runs, SearchResults,
+    Season, SnowTrend, Snowpack, SnowpackPlume,
 };
 use crate::paging::Items;
 use crate::probability::{Chance, Total, build_chances, build_totals, map_chances, map_totals};
-use crate::query::Query;
+use crate::query::{Query, number};
 use crate::units::Units;
 
 /// Every operation the SDK exposes, by OpenAPI `operationId`.
@@ -50,6 +55,14 @@ pub(crate) mod ops {
     pub(crate) const CATALOG_STATION: Operation = open("getCatalogStation");
     pub(crate) const RUNS: Operation = keyed("getAvailableRuns");
     pub(crate) const ATTRIBUTION: Operation = open("getAttribution");
+    pub(crate) const EXPLORE: Operation = keyed("explore");
+    pub(crate) const COMPOSITION: Operation = open("getComposition");
+    pub(crate) const SEASON: Operation = keyed("getLocationSeason");
+    pub(crate) const SNOW_TREND: Operation = keyed("getLocationSnowTrend");
+    pub(crate) const SNOWPACK: Operation = keyed("getLocationSnowpack");
+    pub(crate) const SNOWPACK_PLUME: Operation = keyed("getLocationSnowpackPlume");
+    pub(crate) const ALERT_OUTLINES: Operation = keyed("getAlertOutlines");
+    pub(crate) const AVALANCHE_ZONES: Operation = keyed("getAvalancheZones");
 
     /// For the spec-drift test.
     #[cfg(test)]
@@ -71,6 +84,14 @@ pub(crate) mod ops {
         CATALOG_STATION,
         RUNS,
         ATTRIBUTION,
+        EXPLORE,
+        COMPOSITION,
+        SEASON,
+        SNOW_TREND,
+        SNOWPACK,
+        SNOWPACK_PLUME,
+        ALERT_OUTLINES,
+        AVALANCHE_ZONES,
     ];
 }
 
@@ -153,12 +174,29 @@ impl From<&LocationRef> for LocationKey {
     }
 }
 
+impl From<&ForecastLocation> for LocationKey {
+    fn from(l: &ForecastLocation) -> Self {
+        Self::new(l.state.clone(), l.slug.clone().unwrap_or_default())
+    }
+}
+
 impl fmt::Display for LocationKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0 {
             Ok((state, slug)) => write!(f, "{state}/{slug}"),
             Err(raw) => f.write_str(raw),
         }
+    }
+}
+
+/// A state as the API's canonical form spells it: a two-letter code
+/// lowercased, anything else (a state name, which the server redirects)
+/// passed through.
+fn state_code(state: &str) -> String {
+    if state.len() == 2 && state.bytes().all(|b| b.is_ascii_alphabetic()) {
+        state.to_ascii_lowercase()
+    } else {
+        state.to_owned()
     }
 }
 
@@ -213,6 +251,90 @@ impl Point {
 enum Target {
     Location(LocationKey),
     Point(Point),
+}
+
+/// Prints a coordinate for `near` or `bbox` (BEHAVIOR 3.1 rule 6), or refuses
+/// one that is not a number within `±bound`.
+fn degrees(operation: &'static str, what: &str, value: f64, bound: f64) -> Result<String> {
+    if value.is_finite() && value.abs() <= bound {
+        Ok(number(value))
+    } else {
+        Err(Error::usage(
+            operation,
+            format!("{what} must be a number within ±{bound}, got {value}"),
+        ))
+    }
+}
+
+/// `lat,lon` for `near`, checked.
+fn near_values(operation: &'static str, near: Option<(f64, f64)>) -> Result<Vec<String>> {
+    let Some((lat, lon)) = near else {
+        return Ok(Vec::new());
+    };
+    Ok(vec![
+        degrees(operation, "near latitude", lat, 90.0)?,
+        degrees(operation, "near longitude", lon, 180.0)?,
+    ])
+}
+
+/// Which per-member values a forecast carries (`members`): none (the
+/// default), one row per member at every hour, or the plume view's columns.
+///
+/// [`ForecastRequest::members`] takes a `bool` too.
+///
+/// ```
+/// use ensemble_weather::Members;
+/// assert_eq!(Members::from(true), Members::Rows);
+/// assert_eq!(Members::Plume.as_str(), "plume");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum Members {
+    /// No per-member values (`members=false`, the default).
+    #[default]
+    Off,
+    /// Per-member values at every hour (`members=true`): `timeseries[].members`
+    /// and the member distributions.
+    Rows,
+    /// The plume view (`members=plume`): `series.plume` columns instead of
+    /// per-hour members, and no `timeseries`.
+    Plume,
+}
+
+impl Members {
+    /// The value as the API spells it.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "false",
+            Self::Rows => "true",
+            Self::Plume => "plume",
+        }
+    }
+}
+
+impl From<bool> for Members {
+    fn from(yes: bool) -> Self {
+        if yes { Self::Rows } else { Self::Off }
+    }
+}
+
+impl std::str::FromStr for Members {
+    type Err = Error;
+
+    /// Parses `"true"`, `"false"` or `"plume"`; any other string is a usage
+    /// error.
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "true" => Ok(Self::Rows),
+            "false" => Ok(Self::Off),
+            "plume" => Ok(Self::Plume),
+            other => Err(Error::usage(
+                "getLocationForecast",
+                format!("members takes true, false or \"plume\", not {other:?}"),
+            )),
+        }
+    }
 }
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -302,7 +424,7 @@ pub(crate) struct ForecastParams {
     max_days: Option<u32>,
     include_past: Option<bool>,
     models: Option<bool>,
-    members: Option<bool>,
+    members: Members,
     daily: Option<bool>,
     hourly: Option<bool>,
     nowcast: Option<bool>,
@@ -377,9 +499,12 @@ impl<C> ForecastRequest<'_, C> {
         self
     }
 
-    /// Adds per-member values (Free: the plume view; default false).
-    pub fn members(mut self, yes: bool) -> Self {
-        self.params.members = Some(yes);
+    /// Adds per-member values: `true` (or [`Members::Rows`]) for a row per
+    /// member at every hour, [`Members::Plume`] for the plume view's
+    /// columns. Default off. Which members are served depends on the tier
+    /// ([`Forecast::members_view`]).
+    pub fn members(mut self, members: impl Into<Members>) -> Self {
+        self.params.members = members.into();
         self
     }
 
@@ -546,7 +671,7 @@ pub(crate) struct AlertsParams {
 ///
 /// ```no_run
 /// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
-/// for alert in client.alerts("or/mt-hood-meadows").await?.alerts {
+/// for alert in client.alerts("or/mt-hood-meadows").await?.items {
 ///     println!("{}", alert.headline);
 /// }
 /// # Ok(()) }
@@ -638,6 +763,11 @@ pub(crate) struct SearchParams {
     county: Option<String>,
     kind: Option<LocationType>,
     limit: Option<u32>,
+    sort: Option<ExploreMetric>,
+    order: Option<Order>,
+    near: Option<(f64, f64)>,
+    radius_km: Option<f64>,
+    units: Option<Units>,
 }
 
 /// A location search, from [`Client::search`]. Sent without the API key, so
@@ -683,9 +813,381 @@ impl<C> SearchRequest<'_, C> {
         self.params.limit = Some(limit);
         self
     }
+
+    /// Sorts the hits by an explore metric instead of by relevance (the
+    /// default); each hit then carries its value in
+    /// [`SearchHit::explore`](crate::SearchHit::explore).
+    pub fn sort(mut self, metric: impl Into<ExploreMetric>) -> Self {
+        self.params.sort = Some(metric.into());
+        self
+    }
+
+    /// The order of a metric sort (default [`Order::Desc`], the most first).
+    pub fn order(mut self, order: Order) -> Self {
+        self.params.order = Some(order);
+        self
+    }
+
+    /// Only hits within [`radius_km`](Self::radius_km) of this point
+    /// (decimal degrees).
+    pub fn near(mut self, lat: f64, lon: f64) -> Self {
+        self.params.near = Some((lat, lon));
+        self
+    }
+
+    /// The radius around [`near`](Self::near), km (up to 1000; default 100).
+    pub fn radius_km(mut self, km: f64) -> Self {
+        self.params.radius_km = Some(km);
+        self
+    }
+
+    /// Overrides the client's unit system for the hits' metric values.
+    pub fn units(mut self, units: Units) -> Self {
+        self.params.units = Some(units);
+        self
+    }
 }
 
 sendable!(SearchRequest => SearchResults, exec_search);
+
+// ----------------------------------------------------------------- explore
+
+#[derive(Debug, Clone)]
+pub(crate) struct ExploreParams {
+    metric: ExploreMetric,
+    order: Option<Order>,
+    kind: Option<LocationType>,
+    state: Option<String>,
+    near: Option<(f64, f64)>,
+    radius_km: Option<f64>,
+    elevation_min: Option<f64>,
+    elevation_max: Option<f64>,
+    points: Option<ExplorePoints>,
+    limit: Option<u32>,
+    cursor: Option<String>,
+    units: Option<Units>,
+}
+
+/// A page of places ranked by a metric, from [`Client::explore`]. `.items()`
+/// walks every page.
+///
+/// ```no_run
+/// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
+/// use ensemble_weather::{ExploreMetric, LocationType};
+/// let mut deepest = client
+///     .explore(ExploreMetric::BaseDepth)
+///     .kind(LocationType::SkiArea)
+///     .near(45.33, -121.66)
+///     .radius_km(150.0)
+///     .items();
+/// while let Some(item) = deepest.try_next().await? {
+///     println!("{} {}", item.rank, item.location.name);
+/// }
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone)]
+#[must_use = "a request does nothing until it is awaited or sent"]
+pub struct ExploreRequest<'a, C = Client> {
+    client: &'a C,
+    params: ExploreParams,
+}
+
+impl<C> ExploreRequest<'_, C> {
+    /// The order (default [`Order::Desc`], the most first).
+    pub fn order(mut self, order: Order) -> Self {
+        self.params.order = Some(order);
+        self
+    }
+
+    /// Only places of this type.
+    pub fn kind(mut self, kind: impl Into<LocationType>) -> Self {
+        self.params.kind = Some(kind.into());
+        self
+    }
+
+    /// Only places in this state (a two-letter code, or a state name).
+    pub fn state(mut self, state: impl Into<String>) -> Self {
+        self.params.state = Some(state.into());
+        self
+    }
+
+    /// Only places within [`radius_km`](Self::radius_km) of this point
+    /// (decimal degrees); each item then carries its `distance_km`.
+    pub fn near(mut self, lat: f64, lon: f64) -> Self {
+        self.params.near = Some((lat, lon));
+        self
+    }
+
+    /// The radius around [`near`](Self::near), km (up to 1000; default 100).
+    pub fn radius_km(mut self, km: f64) -> Self {
+        self.params.radius_km = Some(km);
+        self
+    }
+
+    /// The lowest point elevation, in the response's length unit.
+    pub fn elevation_min(mut self, elevation: f64) -> Self {
+        self.params.elevation_min = Some(elevation);
+        self
+    }
+
+    /// The highest point elevation, in the response's length unit.
+    pub fn elevation_max(mut self, elevation: f64) -> Self {
+        self.params.elevation_max = Some(elevation);
+        self
+    }
+
+    /// Which points of each place to rank (default
+    /// [`ExplorePoints::Primary`], each place's own point).
+    pub fn points(mut self, points: ExplorePoints) -> Self {
+        self.params.points = Some(points);
+        self
+    }
+
+    /// The page size (1..=100; default 25).
+    pub fn limit(mut self, limit: u32) -> Self {
+        self.params.limit = Some(limit);
+        self
+    }
+
+    /// Starts at this cursor (a previous page's `next_cursor`).
+    pub fn cursor(mut self, cursor: impl Into<String>) -> Self {
+        self.params.cursor = Some(cursor.into());
+        self
+    }
+
+    /// Overrides the client's unit system for this request.
+    pub fn units(mut self, units: Units) -> Self {
+        self.params.units = Some(units);
+        self
+    }
+}
+
+sendable!(ExploreRequest => ExplorePage, exec_explore);
+pageable!(ExploreRequest => ExploreItem, page_explore);
+
+// ------------------------------------------- season, snow trend, snowpack
+
+#[derive(Debug, Clone)]
+pub(crate) struct SeasonParams {
+    location: LocationKey,
+    water_year: Option<u32>,
+    include_daily: bool,
+    units: Option<Units>,
+}
+
+/// A location's observed season to date, from [`Client::season`].
+///
+/// ```no_run
+/// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
+/// let season = client.season("or/mt-hood-meadows").include_daily(true).await?;
+/// if let Some(total) = &season.precipitation {
+///     println!("{} {} since {}", total.amount, total.unit, season.starts);
+/// }
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone)]
+#[must_use = "a request does nothing until it is awaited or sent"]
+pub struct SeasonRequest<'a, C = Client> {
+    client: &'a C,
+    params: SeasonParams,
+}
+
+impl<C> SeasonRequest<'_, C> {
+    /// The water year (October to September), named by the year it ends in
+    /// (2027 or later; default the current one).
+    pub fn water_year(mut self, year: u32) -> Self {
+        self.params.water_year = Some(year);
+        self
+    }
+
+    /// Also returns the day-by-day record ([`Season::daily`]).
+    pub fn include_daily(mut self, yes: bool) -> Self {
+        self.params.include_daily = yes;
+        self
+    }
+
+    /// Overrides the client's unit system for this request.
+    pub fn units(mut self, units: Units) -> Self {
+        self.params.units = Some(units);
+        self
+    }
+}
+
+sendable!(SeasonRequest => Season, exec_season);
+
+#[derive(Debug, Clone)]
+pub(crate) struct SnowTrendParams {
+    location: LocationKey,
+    elevation: Option<String>,
+    units: Option<Units>,
+}
+
+/// Each recent run's daily snowfall at a location, from
+/// [`Client::snow_trend`]. It needs a Plus or Pro plan: anonymous and Free
+/// callers get a permission error (`PLUS_REQUIRED`).
+///
+/// ```no_run
+/// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
+/// let trend = client.snow_trend("or/mt-hood-meadows").elevation("summit").await?;
+/// for grid in &trend.grids {
+///     println!("{}: {} runs", grid.source, grid.runs.len());
+/// }
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone)]
+#[must_use = "a request does nothing until it is awaited or sent"]
+pub struct SnowTrendRequest<'a, C = Client> {
+    client: &'a C,
+    params: SnowTrendParams,
+}
+
+impl<C> SnowTrendRequest<'_, C> {
+    /// One of the location's named elevations (default its primary).
+    pub fn elevation(mut self, name: impl Into<String>) -> Self {
+        self.params.elevation = Some(name.into());
+        self
+    }
+
+    /// Overrides the client's unit system for this request.
+    pub fn units(mut self, units: Units) -> Self {
+        self.params.units = Some(units);
+        self
+    }
+}
+
+sendable!(SnowTrendRequest => SnowTrend, exec_snow_trend);
+
+#[derive(Debug, Clone)]
+pub(crate) struct SnowpackParams {
+    location: LocationKey,
+    units: Option<Units>,
+}
+
+/// A location's snowpack forecast (beta), from [`Client::snowpack`].
+///
+/// ```no_run
+/// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
+/// let snowpack = client.snowpack("or/mt-hood-meadows").await?;
+/// for spot in &snowpack.spots {
+///     println!("{:?}: {:?}", spot.name, spot.depth.p50.first());
+/// }
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone)]
+#[must_use = "a request does nothing until it is awaited or sent"]
+pub struct SnowpackRequest<'a, C = Client> {
+    client: &'a C,
+    params: SnowpackParams,
+}
+
+/// A location's snow-depth plume (beta), from [`Client::snowpack_plume`].
+///
+/// ```no_run
+/// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
+/// let plume = client.snowpack_plume("or/mt-hood-meadows").await?;
+/// println!("{}", plume.spread);
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone)]
+#[must_use = "a request does nothing until it is awaited or sent"]
+pub struct SnowpackPlumeRequest<'a, C = Client> {
+    client: &'a C,
+    params: SnowpackParams,
+}
+
+macro_rules! units_setter {
+    ($req:ident) => {
+        impl<C> $req<'_, C> {
+            /// Overrides the client's unit system for this request.
+            pub fn units(mut self, units: Units) -> Self {
+                self.params.units = Some(units);
+                self
+            }
+        }
+    };
+}
+units_setter!(SnowpackRequest);
+units_setter!(SnowpackPlumeRequest);
+sendable!(SnowpackRequest => Snowpack, exec_snowpack);
+sendable!(SnowpackPlumeRequest => SnowpackPlume, exec_snowpack_plume);
+
+// ---------------------------------------------------------------- map layers
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AlertOutlinesParams {
+    classes: Vec<AlertClass>,
+    bbox: Option<[f64; 4]>,
+}
+
+/// The active winter and wind alerts' outlines as GeoJSON, from
+/// [`Client::alert_outlines`].
+///
+/// ```no_run
+/// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
+/// use ensemble_weather::AlertClass;
+/// let outlines = client
+///     .alert_outlines()
+///     .classes([AlertClass::Winter])
+///     .bbox(-125.0, 41.0, -116.0, 49.0)
+///     .await?;
+/// for feature in &outlines.features {
+///     println!("{}", feature.properties.event);
+/// }
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone)]
+#[must_use = "a request does nothing until it is awaited or sent"]
+pub struct AlertOutlinesRequest<'a, C = Client> {
+    client: &'a C,
+    params: AlertOutlinesParams,
+}
+
+impl<C> AlertOutlinesRequest<'_, C> {
+    /// Only alerts of these classes (default every class).
+    pub fn classes<I: IntoIterator<Item = S>, S: Into<AlertClass>>(mut self, classes: I) -> Self {
+        self.params.classes = classes.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Only alerts whose bounding box touches this one, in decimal degrees
+    /// (features are served whole, not clipped). West must not exceed east,
+    /// nor south north.
+    pub fn bbox(mut self, west: f64, south: f64, east: f64, north: f64) -> Self {
+        self.params.bbox = Some([west, south, east, north]);
+        self
+    }
+}
+
+sendable!(AlertOutlinesRequest => AlertOutlines, exec_alert_outlines);
+
+/// Every avalanche center's forecast zones with today's rating as GeoJSON,
+/// from [`Client::avalanche_zones`].
+#[derive(Debug, Clone)]
+#[must_use = "a request does nothing until it is awaited or sent"]
+pub struct AvalancheZonesRequest<'a, C = Client> {
+    client: &'a C,
+    params: NoParams,
+}
+
+sendable!(AvalancheZonesRequest => AvalancheZones, exec_avalanche_zones);
+
+/// The blend's served models and members, from [`Client::composition`]. Sent
+/// without the API key.
+///
+/// ```no_run
+/// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
+/// let composition = client.composition().await?;
+/// println!("{} members from {} models", composition.total_members, composition.model_count);
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone)]
+#[must_use = "a request does nothing until it is awaited or sent"]
+pub struct CompositionRequest<'a, C = Client> {
+    client: &'a C,
+    params: NoParams,
+}
+
+sendable!(CompositionRequest => Composition, exec_composition);
 
 // --------------------------------------------------------------- locations
 
@@ -973,11 +1475,13 @@ sendable!(CatalogStationRequest => CatalogStationDetail, exec_catalog_station);
 // ------------------------------------------------------ runs, attribution
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct LimitParams {
+pub(crate) struct RunsParams {
     limit: Option<u32>,
+    cursor: Option<String>,
 }
 
-/// An available-runs request, from [`Client::runs`].
+/// An available-runs request, from [`Client::runs`]. `.items()` walks every
+/// page.
 ///
 /// ```no_run
 /// # async fn run(client: ensemble_weather::Client) -> Result<(), ensemble_weather::Error> {
@@ -989,22 +1493,25 @@ pub(crate) struct LimitParams {
 #[must_use = "a request does nothing until it is awaited or sent"]
 pub struct RunsRequest<'a, C = Client> {
     client: &'a C,
-    params: LimitParams,
+    params: RunsParams,
 }
 
-macro_rules! limit_setter {
-    ($req:ident, $max:literal, $default:literal) => {
-        impl<C> $req<'_, C> {
-            #[doc = concat!("The maximum number (up to ", $max, "; default ", $default, ").")]
-            pub fn limit(mut self, limit: u32) -> Self {
-                self.params.limit = Some(limit);
-                self
-            }
-        }
-    };
+impl<C> RunsRequest<'_, C> {
+    /// The page size (up to 100; default 10).
+    pub fn limit(mut self, limit: u32) -> Self {
+        self.params.limit = Some(limit);
+        self
+    }
+
+    /// Starts at this cursor (a previous page's `next_cursor`).
+    pub fn cursor(mut self, cursor: impl Into<String>) -> Self {
+        self.params.cursor = Some(cursor.into());
+        self
+    }
 }
-limit_setter!(RunsRequest, 100, 10);
+
 sendable!(RunsRequest => Runs, exec_runs);
+pageable!(RunsRequest => AvailableRun, page_runs);
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct NoParams;
@@ -1038,7 +1545,7 @@ fn forecast_params(target: Target) -> ForecastParams {
         max_days: None,
         include_past: None,
         models: None,
-        members: None,
+        members: Members::Off,
         daily: None,
         hourly: None,
         nowcast: None,
@@ -1157,6 +1664,11 @@ macro_rules! constructors {
                         county: None,
                         kind: None,
                         limit: None,
+                        sort: None,
+                        order: None,
+                        near: None,
+                        radius_km: None,
+                        units: None,
                     },
                 }
             }
@@ -1226,7 +1738,7 @@ macro_rules! constructors {
             pub fn runs(&self) -> RunsRequest<'_, Self> {
                 RunsRequest {
                     client: self,
-                    params: LimitParams::default(),
+                    params: RunsParams::default(),
                 }
             }
 
@@ -1234,6 +1746,109 @@ macro_rules! constructors {
             /// notices. Sent without the API key.
             pub fn attribution(&self) -> AttributionRequest<'_, Self> {
                 AttributionRequest {
+                    client: self,
+                    params: NoParams,
+                }
+            }
+
+            /// One page of places ranked by a metric, such as
+            /// [`ExploreMetric::Snow5d`].
+            pub fn explore(&self, metric: impl Into<ExploreMetric>) -> ExploreRequest<'_, Self> {
+                ExploreRequest {
+                    client: self,
+                    params: ExploreParams {
+                        metric: metric.into(),
+                        order: None,
+                        kind: None,
+                        state: None,
+                        near: None,
+                        radius_km: None,
+                        elevation_min: None,
+                        elevation_max: None,
+                        points: None,
+                        limit: None,
+                        cursor: None,
+                        units: None,
+                    },
+                }
+            }
+
+            /// The blend's served models and members. Sent without the API
+            /// key.
+            pub fn composition(&self) -> CompositionRequest<'_, Self> {
+                CompositionRequest {
+                    client: self,
+                    params: NoParams,
+                }
+            }
+
+            /// The observed season-to-date precipitation at a named
+            /// location.
+            pub fn season(&self, location: impl Into<LocationKey>) -> SeasonRequest<'_, Self> {
+                SeasonRequest {
+                    client: self,
+                    params: SeasonParams {
+                        location: location.into(),
+                        water_year: None,
+                        include_daily: false,
+                        units: None,
+                    },
+                }
+            }
+
+            /// Each recent run's daily snowfall at a named location. It
+            /// needs a Plus or Pro plan.
+            pub fn snow_trend(
+                &self,
+                location: impl Into<LocationKey>,
+            ) -> SnowTrendRequest<'_, Self> {
+                SnowTrendRequest {
+                    client: self,
+                    params: SnowTrendParams {
+                        location: location.into(),
+                        elevation: None,
+                        units: None,
+                    },
+                }
+            }
+
+            /// The snowpack forecast of a named location's spots (beta).
+            pub fn snowpack(&self, location: impl Into<LocationKey>) -> SnowpackRequest<'_, Self> {
+                SnowpackRequest {
+                    client: self,
+                    params: SnowpackParams {
+                        location: location.into(),
+                        units: None,
+                    },
+                }
+            }
+
+            /// The snow-depth plume of a named location (beta).
+            pub fn snowpack_plume(
+                &self,
+                location: impl Into<LocationKey>,
+            ) -> SnowpackPlumeRequest<'_, Self> {
+                SnowpackPlumeRequest {
+                    client: self,
+                    params: SnowpackParams {
+                        location: location.into(),
+                        units: None,
+                    },
+                }
+            }
+
+            /// The active winter and wind alerts' outlines, as GeoJSON.
+            pub fn alert_outlines(&self) -> AlertOutlinesRequest<'_, Self> {
+                AlertOutlinesRequest {
+                    client: self,
+                    params: AlertOutlinesParams::default(),
+                }
+            }
+
+            /// Every avalanche center's forecast zones with today's rating,
+            /// as GeoJSON.
+            pub fn avalanche_zones(&self) -> AvalancheZonesRequest<'_, Self> {
+                AvalancheZonesRequest {
                     client: self,
                     params: NoParams,
                 }
@@ -1277,7 +1892,9 @@ impl Client {
         q.int("max_days", p.max_days, None);
         q.flag("include_past", p.include_past, false);
         q.flag("models", p.models, false);
-        q.flag("members", p.members, false);
+        if p.members != Members::Off {
+            q.set("members", p.members.as_str());
+        }
         q.flag("daily", p.daily, true);
         q.flag("hourly", p.hourly, true);
         q.flag("nowcast", p.nowcast, true);
@@ -1287,9 +1904,12 @@ impl Client {
         q.literal("prob", chances.value.as_deref());
         q.literal("totals", totals.value.as_deref());
         q.list("diagnostics", &p.diagnostics);
-        q.sorted_list("include", &p.include);
-        if p.feels_like != ["nws"] {
-            q.list("feels_like", &p.feels_like);
+        q.list("include", &p.include);
+        let mut feels_like = p.feels_like.clone();
+        feels_like.sort();
+        feels_like.dedup();
+        if feels_like != ["nws"] {
+            q.list("feels_like", &feels_like);
         }
         match &p.target {
             Target::Location(_) => q.list("elevations", &p.elevations),
@@ -1409,27 +2029,146 @@ impl Client {
     pub(crate) async fn exec_search(&self, p: SearchParams) -> Result<SearchResults> {
         let mut q = Query::default();
         q.set("q", p.text);
-        q.opt("state", p.state.as_deref());
+        q.opt("state", p.state.as_deref().map(state_code).as_deref());
         q.opt("county", p.county.as_deref());
         q.opt("type", p.kind.as_ref().map(LocationType::as_str));
         q.int("limit", p.limit, Some(20));
+        q.opt("sort", p.sort.as_ref().map(ExploreMetric::as_str));
+        q.opt_default("order", p.order.as_ref().map(Order::as_str), "desc");
+        q.joined("near", &near_values(ops::SEARCH.id, p.near)?);
+        q.num("radius_km", p.radius_km, Some(100.0));
+        Self::units_query(&mut q, &self.units_or(p.units));
         self.get(ops::SEARCH, &["search", "locations"], &q).await
+    }
+
+    pub(crate) async fn exec_explore(&self, p: ExploreParams) -> Result<ExplorePage> {
+        let mut q = Query::default();
+        q.set("metric", p.metric.as_str());
+        q.opt_default("order", p.order.as_ref().map(Order::as_str), "desc");
+        q.opt("type", p.kind.as_ref().map(LocationType::as_str));
+        q.opt("state", p.state.as_deref().map(state_code).as_deref());
+        q.joined("near", &near_values(ops::EXPLORE.id, p.near)?);
+        q.num("radius_km", p.radius_km, Some(100.0));
+        q.num("elevation_min", p.elevation_min, None);
+        q.num("elevation_max", p.elevation_max, None);
+        q.opt_default(
+            "points",
+            p.points.as_ref().map(ExplorePoints::as_str),
+            "primary",
+        );
+        q.int("limit", p.limit, Some(25));
+        q.opt("cursor", p.cursor.as_deref());
+        Self::units_query(&mut q, &self.units_or(p.units));
+        self.get(ops::EXPLORE, &["explore"], &q).await
+    }
+
+    pub(crate) async fn page_explore(
+        &self,
+        p: ExploreParams,
+    ) -> Result<(Vec<ExploreItem>, Option<String>)> {
+        let page = self.exec_explore(p).await?;
+        Ok((page.items, page.next_cursor))
+    }
+
+    pub(crate) async fn exec_season(&self, p: SeasonParams) -> Result<Season> {
+        let (state, slug) = p.location.parts(ops::SEASON.id)?;
+        let mut q = Query::default();
+        q.int("water_year", p.water_year, None);
+        if p.include_daily {
+            q.list("include", &["daily".to_owned()]);
+        }
+        Self::units_query(&mut q, &self.units_or(p.units));
+        self.get(ops::SEASON, &["locations", state, slug, "season"], &q)
+            .await
+    }
+
+    pub(crate) async fn exec_snow_trend(&self, p: SnowTrendParams) -> Result<SnowTrend> {
+        let (state, slug) = p.location.parts(ops::SNOW_TREND.id)?;
+        let mut q = Query::default();
+        q.opt("elevation", p.elevation.as_deref());
+        Self::units_query(&mut q, &self.units_or(p.units));
+        self.get(
+            ops::SNOW_TREND,
+            &["locations", state, slug, "snow-trend"],
+            &q,
+        )
+        .await
+    }
+
+    pub(crate) async fn exec_snowpack(&self, p: SnowpackParams) -> Result<Snowpack> {
+        let (state, slug) = p.location.parts(ops::SNOWPACK.id)?;
+        let mut q = Query::default();
+        Self::units_query(&mut q, &self.units_or(p.units));
+        self.get(ops::SNOWPACK, &["locations", state, slug, "snowpack"], &q)
+            .await
+    }
+
+    pub(crate) async fn exec_snowpack_plume(&self, p: SnowpackParams) -> Result<SnowpackPlume> {
+        let (state, slug) = p.location.parts(ops::SNOWPACK_PLUME.id)?;
+        let mut q = Query::default();
+        Self::units_query(&mut q, &self.units_or(p.units));
+        self.get(
+            ops::SNOWPACK_PLUME,
+            &["locations", state, slug, "snowpack", "plume"],
+            &q,
+        )
+        .await
+    }
+
+    pub(crate) async fn exec_alert_outlines(
+        &self,
+        p: AlertOutlinesParams,
+    ) -> Result<AlertOutlines> {
+        let op = ops::ALERT_OUTLINES.id;
+        let mut q = Query::default();
+        let classes: Vec<String> = p.classes.iter().map(|c| c.as_str().to_owned()).collect();
+        q.list("class", &classes);
+        if let Some([west, south, east, north]) = p.bbox {
+            let values = vec![
+                degrees(op, "bbox west", west, 180.0)?,
+                degrees(op, "bbox south", south, 90.0)?,
+                degrees(op, "bbox east", east, 180.0)?,
+                degrees(op, "bbox north", north, 90.0)?,
+            ];
+            if west > east || south > north {
+                return Err(Error::usage(
+                    op,
+                    "a bbox is (west, south, east, north) with west <= east and south <= north",
+                ));
+            }
+            q.joined("bbox", &values);
+        }
+        self.get(ops::ALERT_OUTLINES, &["alerts", "outlines"], &q)
+            .await
+    }
+
+    pub(crate) async fn exec_avalanche_zones(&self, _: NoParams) -> Result<AvalancheZones> {
+        self.get(
+            ops::AVALANCHE_ZONES,
+            &["avalanche", "zones"],
+            &Query::default(),
+        )
+        .await
+    }
+
+    pub(crate) async fn exec_composition(&self, _: NoParams) -> Result<Composition> {
+        self.get(ops::COMPOSITION, &["composition"], &Query::default())
+            .await
     }
 
     pub(crate) async fn exec_locations(&self, p: LocationsParams) -> Result<LocationsPage> {
         let mut q = Query::default();
         q.opt("type", p.kind.as_ref().map(LocationType::as_str));
         Self::units_query(&mut q, &self.units_or(p.units));
-        q.int("limit", p.limit, None);
         q.opt("cursor", p.cursor.as_deref());
         match p.state.as_deref().filter(|s| !s.is_empty()) {
-            None => self.get(ops::ALL_LOCATIONS, &["locations"], &q).await,
+            None => {
+                q.int("limit", p.limit, Some(500));
+                self.get(ops::ALL_LOCATIONS, &["locations"], &q).await
+            }
             Some(state) => {
-                let state = if state.len() == 2 {
-                    state.to_ascii_lowercase()
-                } else {
-                    state.to_owned()
-                };
+                q.int("limit", p.limit, None);
+                let state = state_code(state);
                 self.get(ops::STATE_LOCATIONS, &["locations", &state], &q)
                     .await
             }
@@ -1441,7 +2180,7 @@ impl Client {
         p: LocationsParams,
     ) -> Result<(Vec<LocationSummary>, Option<String>)> {
         let page = self.exec_locations(p).await?;
-        Ok((page.locations, page.next_cursor))
+        Ok((page.items, page.next_cursor))
     }
 
     pub(crate) async fn exec_catalog_locations(
@@ -1475,8 +2214,8 @@ impl Client {
         q.opt("admin1", p.admin1.as_deref());
         q.opt("country", p.country.as_deref());
         let networks: Vec<String> = p.networks.iter().map(|n| n.as_str().to_owned()).collect();
-        q.sorted_list("network", &networks);
-        q.sorted_list("capability", &p.capabilities);
+        q.list("network", &networks);
+        q.list("capability", &p.capabilities);
         q.opt("status", p.status.as_ref().map(StationStatus::as_str));
         q.int("limit", p.limit, Some(20));
         q.opt("cursor", p.cursor.as_deref());
@@ -1523,10 +2262,19 @@ impl Client {
         .await
     }
 
-    pub(crate) async fn exec_runs(&self, p: LimitParams) -> Result<Runs> {
+    pub(crate) async fn exec_runs(&self, p: RunsParams) -> Result<Runs> {
         let mut q = Query::default();
         q.int("limit", p.limit, Some(10));
+        q.opt("cursor", p.cursor.as_deref());
         self.get(ops::RUNS, &["runs"], &q).await
+    }
+
+    pub(crate) async fn page_runs(
+        &self,
+        p: RunsParams,
+    ) -> Result<(Vec<AvailableRun>, Option<String>)> {
+        let page = self.exec_runs(p).await?;
+        Ok((page.items, page.next_cursor))
     }
 
     pub(crate) async fn exec_attribution(&self, _: NoParams) -> Result<Attribution> {

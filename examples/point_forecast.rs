@@ -21,7 +21,7 @@ async fn main() -> Result<(), ensemble_weather::Error> {
             point.lat, point.lon, point.elevation, point.elevation_source
         );
     }
-    for hour in forecast.forecast.timeseries.iter().take(6) {
+    for hour in forecast.series.timeseries.iter().take(6) {
         if let Some(median) = hour.ensemble.temperature.median() {
             println!("{}: median temperature {median:.1}", hour.valid_time);
         }

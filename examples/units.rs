@@ -20,7 +20,7 @@ async fn main() -> Result<(), ensemble_weather::Error> {
             .units
             .unit_for(&Variable::Snowfall)
             .map_or("", |u| u.symbol());
-        let Some(hour) = forecast.forecast.timeseries.first() else {
+        let Some(hour) = forecast.series.timeseries.first() else {
             continue;
         };
         let t = hour

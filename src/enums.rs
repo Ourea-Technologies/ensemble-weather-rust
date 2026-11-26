@@ -210,6 +210,10 @@ string_enum! {
         SnowLikely => "snow_likely",
         /// Snow.
         Snow => "snow",
+        /// Light snow.
+        LightSnow => "light_snow",
+        /// Heavy snow.
+        HeavySnow => "heavy_snow",
         /// A slight chance of freezing rain.
         SlightChanceFreezingRain => "slight_chance_freezing_rain",
         /// A chance of freezing rain.
@@ -266,10 +270,12 @@ string_enum! {
     ///
     /// ```
     /// use ensemble_weather::MembersView;
-    /// assert_eq!(MembersView::from("plume"), MembersView::Plume);
+    /// assert_eq!(MembersView::from("pool"), MembersView::Pool);
     /// ```
     pub enum MembersView {
-        /// The plume view (Free): temperature, precipitation and snow only.
+        /// One unlabelled pool of members (Free and anonymous callers).
+        Pool => "pool",
+        /// The plume view: temperature, precipitation and snow only.
         Plume => "plume",
         /// Every variable (Pro).
         Full => "full",
@@ -322,6 +328,8 @@ string_enum! {
         Observation => "observation",
         /// Weather alerts.
         Alerts => "alerts",
+        /// An avalanche center's forecast.
+        AvalancheForecast => "avalanche_forecast",
         /// Climatology.
         Climatology => "climatology",
         /// Terrain.
@@ -398,10 +406,10 @@ string_enum! {
     /// An astronomical season.
     ///
     /// ```
-    /// use ensemble_weather::Season;
-    /// assert_eq!(Season::from("winter"), Season::Winter);
+    /// use ensemble_weather::AstronomicalSeason;
+    /// assert_eq!(AstronomicalSeason::from("winter"), AstronomicalSeason::Winter);
     /// ```
-    pub enum Season {
+    pub enum AstronomicalSeason {
         /// Spring.
         Spring => "spring",
         /// Summer.
@@ -551,6 +559,10 @@ string_enum! {
         RainSnowMix => "rain_snow_mix",
         /// `snow`.
         Snow => "snow",
+        /// `light_snow`.
+        LightSnow => "light_snow",
+        /// `heavy_snow`.
+        HeavySnow => "heavy_snow",
         /// `freezing_rain`.
         FreezingRain => "freezing_rain",
         /// `night_clear`.
@@ -589,8 +601,145 @@ string_enum! {
         NightRainSnowMix => "night_rain_snow_mix",
         /// `night_snow`.
         NightSnow => "night_snow",
+        /// `night_light_snow`.
+        NightLightSnow => "night_light_snow",
+        /// `night_heavy_snow`.
+        NightHeavySnow => "night_heavy_snow",
         /// `night_freezing_rain`.
         NightFreezingRain => "night_freezing_rain",
+    }
+}
+
+string_enum! {
+    /// The character of falling snow, from its density (or wet at the
+    /// surface).
+    ///
+    /// ```
+    /// use ensemble_weather::SnowCharacter;
+    /// assert_eq!(SnowCharacter::from("very_dry"), SnowCharacter::VeryDry);
+    /// ```
+    pub enum SnowCharacter {
+        /// Wet (sticky): wet at the surface, whatever its ratio.
+        Wet => "wet",
+        /// Average.
+        Average => "average",
+        /// Dry: powder.
+        Dry => "dry",
+        /// Dense (heavy).
+        Dense => "dense",
+        /// Very dry: cold smoke.
+        VeryDry => "very_dry",
+    }
+}
+
+string_enum! {
+    /// The class of an alert outline.
+    ///
+    /// ```
+    /// use ensemble_weather::AlertClass;
+    /// assert_eq!(AlertClass::from("winter"), AlertClass::Winter);
+    /// ```
+    pub enum AlertClass {
+        /// Wind alerts.
+        Wind => "wind",
+        /// Winter alerts.
+        Winter => "winter",
+    }
+}
+
+string_enum! {
+    /// A mountain pass's official restriction level, least to most severe.
+    ///
+    /// ```
+    /// use ensemble_weather::PassStatusLevel;
+    /// assert_eq!(PassStatusLevel::from("chains"), PassStatusLevel::Chains);
+    /// ```
+    pub enum PassStatusLevel {
+        /// No restrictions.
+        None => "none",
+        /// An advisory.
+        Advisory => "advisory",
+        /// Traction tires advised or required.
+        Traction => "traction",
+        /// Chain restriction level 1 (Caltrans R1).
+        R1 => "r1",
+        /// Chain restriction level 2 (Caltrans R2).
+        R2 => "r2",
+        /// Chain restriction level 3 (Caltrans R3).
+        R3 => "r3",
+        /// Chains required.
+        Chains => "chains",
+        /// Closed.
+        Closed => "closed",
+    }
+}
+
+string_enum! {
+    /// What [`Client::explore`](crate::Client::explore) ranks by, and a metric
+    /// [`SearchRequest::sort`](crate::SearchRequest::sort).
+    ///
+    /// ```
+    /// use ensemble_weather::ExploreMetric;
+    /// assert_eq!(ExploreMetric::from("snow_5d"), ExploreMetric::Snow5d);
+    /// ```
+    pub enum ExploreMetric {
+        /// The snow depth on the ground.
+        BaseDepth => "base_depth",
+        /// New snow in the last 24 hours.
+        NewSnow24h => "new_snow_24h",
+        /// Today's forecast snowfall.
+        SnowToday => "snow_today",
+        /// Forecast snowfall over 5 days.
+        Snow5d => "snow_5d",
+        /// Forecast snowfall over 10 days.
+        Snow10d => "snow_10d",
+        /// Forecast snowfall over 14 days.
+        Snow14d => "snow_14d",
+        /// Today's forecast precipitation.
+        PrecipToday => "precip_today",
+        /// Forecast precipitation over 5 days.
+        Precip5d => "precip_5d",
+        /// Forecast precipitation over 10 days.
+        Precip10d => "precip_10d",
+        /// Forecast precipitation over 14 days.
+        Precip14d => "precip_14d",
+        /// Observed season-to-date precipitation.
+        SeasonPrecip => "season_precip",
+        /// Season-to-date precipitation as a percent of normal.
+        SeasonPrecipPctNormal => "season_precip_pct_normal",
+        /// Season-to-date snowfall.
+        SeasonSnow => "season_snow",
+    }
+}
+
+string_enum! {
+    /// The order of a ranking.
+    ///
+    /// ```
+    /// use ensemble_weather::Order;
+    /// assert_eq!(Order::from("asc"), Order::Asc);
+    /// ```
+    pub enum Order {
+        /// The most first (the default).
+        Desc => "desc",
+        /// The least first.
+        Asc => "asc",
+    }
+}
+
+string_enum! {
+    /// Which points of a place [`Client::explore`](crate::Client::explore)
+    /// ranks.
+    ///
+    /// ```
+    /// use ensemble_weather::ExplorePoints;
+    /// assert_eq!(ExplorePoints::from("all"), ExplorePoints::All);
+    /// ```
+    pub enum ExplorePoints {
+        /// Each place's own point (the default).
+        Primary => "primary",
+        /// Each named elevation too.
+        All => "all",
     }
 }
 
@@ -738,6 +887,10 @@ string_enum! {
         Nwac => "nwac",
         /// `mt_mesonet`.
         MtMesonet => "mt_mesonet",
+        /// `rain_gauge`.
+        RainGauge => "rain_gauge",
+        /// `surfrad`.
+        Surfrad => "surfrad",
     }
 }
 

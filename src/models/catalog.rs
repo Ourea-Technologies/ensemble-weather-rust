@@ -120,8 +120,9 @@ pub struct CatalogStation {
     pub aliases: Vec<String>,
     /// The network, such as [`StationNetwork::Snotel`].
     pub network: Option<StationNetwork>,
-    /// The network's own station ID.
-    pub source_station_id: Option<String>,
+    /// (JSON `source_station_id`) The network's own station ID.
+    #[serde(rename(deserialize = "source_station_id"), alias = "source_id")]
+    pub source_id: Option<String>,
     /// The elevation above mean sea level, m.
     pub elevation_msl_m: Option<f64>,
     /// The sensor height above ground, m.
@@ -129,8 +130,10 @@ pub struct CatalogStation {
     /// What the station measures.
     #[serde(default)]
     pub sensor_capabilities: Vec<String>,
-    /// The live-feed status, such as [`StationStatus::Active`].
-    pub station_status: Option<StationStatus>,
+    /// (JSON `station_status`) The live-feed status, such as
+    /// [`StationStatus::Active`].
+    #[serde(rename(deserialize = "station_status"), alias = "status")]
+    pub status: Option<StationStatus>,
     /// The last report's time (RFC 3339).
     pub last_report_at: Option<String>,
     /// The last report, as the API sends it.
@@ -141,8 +144,9 @@ pub struct CatalogStation {
     pub decommission_date: Option<String>,
     /// How often it reports, minutes.
     pub update_frequency_minutes: Option<u32>,
-    /// The station's page.
-    pub station_url: Option<String>,
+    /// (JSON `station_url`) The station's page.
+    #[serde(rename(deserialize = "station_url"), alias = "url")]
+    pub url: Option<String>,
     /// The station's data.
     pub data_url: Option<String>,
     /// A short description.
@@ -171,6 +175,9 @@ pub struct CatalogStationDetail {
     /// The record.
     #[serde(flatten)]
     pub station: CatalogStation,
+    /// Whether search engines should index the station's page (`false` for
+    /// a bare roster station).
+    pub indexable: bool,
     /// Photos.
     #[serde(default)]
     pub photos: Vec<CatalogPhoto>,
@@ -211,8 +218,11 @@ pub struct CatalogPrimaryLocation {
 pub struct CatalogElevation {
     /// The label, such as `"summit"`.
     pub label: String,
-    /// The elevation, m.
-    pub elevation_m: f64,
+    /// What the place is called, for display.
+    pub display_name: Option<String>,
+    /// (JSON `elevation_m`) The elevation, m.
+    #[serde(rename(deserialize = "elevation_m"), alias = "height_m")]
+    pub height_m: f64,
     /// A latitude other than the location's.
     pub lat_override: Option<f64>,
     /// A longitude other than the location's.
@@ -265,8 +275,9 @@ pub struct CatalogNearbyStation {
     pub name: String,
     /// The network.
     pub network: StationNetwork,
-    /// The live-feed status.
-    pub station_status: StationStatus,
+    /// (JSON `station_status`) The live-feed status.
+    #[serde(rename(deserialize = "station_status"), alias = "status")]
+    pub status: StationStatus,
     /// The distance, km.
     pub distance_km: Option<f64>,
     /// The elevation difference, m.
@@ -283,8 +294,9 @@ pub struct CatalogTemplate {
     pub id: String,
     /// The location type it is for.
     pub location_type: Option<LocationType>,
-    /// The template variant.
-    pub template_variant: Option<TemplateVariant>,
+    /// (JSON `template_variant`) The template variant.
+    #[serde(rename(deserialize = "template_variant"), alias = "variant")]
+    pub variant: Option<TemplateVariant>,
     /// The sections, in order.
     #[serde(default)]
     pub spec: Vec<TemplateSection>,
@@ -318,8 +330,9 @@ pub struct CatalogContentEntry {
     pub slot: String,
     /// Its order within the slot.
     pub display_order: i32,
-    /// The locale served.
-    pub resolved_locale: String,
+    /// (JSON `resolved_locale`) The locale served.
+    #[serde(rename(deserialize = "resolved_locale"), alias = "locale")]
+    pub locale: String,
     /// When it last changed (RFC 3339).
     pub updated_at: String,
 }

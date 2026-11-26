@@ -7,7 +7,7 @@ use crate::enums::{
     LocationType, NowcastSource,
 };
 use crate::meta::{ResponseMeta, with_meta};
-use crate::models::TimeSeriesPoint;
+use crate::models::{ExploreValue, PassForecast, PlaceSummary, TimeSeriesPoint};
 use crate::units::Units;
 
 /// A named location, or the point of a coordinate request.
@@ -87,6 +87,30 @@ pub struct ActiveAlert {
     pub expires: String,
     /// When the hazard ends (RFC 3339).
     pub ends: Option<String>,
+    /// When NWS issued this message (RFC 3339).
+    pub sent: Option<String>,
+    /// The CAP message type: `"alert"`, `"update"` or `"cancel"`. Not a sign
+    /// of a new event; dedupe on `event_key`.
+    pub message_type: Option<String>,
+    /// The IDs of the messages this one replaces.
+    #[serde(default)]
+    pub references: Vec<String>,
+    /// The issuing office, such as `"NWS Portland OR"`.
+    pub sender_name: Option<String>,
+    /// The places this message covers, as NWS words them.
+    pub area_desc: Option<String>,
+    /// The full NWS text, unedited.
+    pub description: Option<String>,
+    /// What NWS says to do, unedited.
+    pub instruction: Option<String>,
+    /// The NWS forecast page for this location.
+    pub source_url: Option<String>,
+    /// The stable identity of the event across its messages: dedupe on this
+    /// to notify once per event. Opaque.
+    pub event_key: Option<String>,
+    /// The VTEC action, lower case (`"can"`, `"exp"` and `"upg"` end the
+    /// event).
+    pub vtec_action: Option<String>,
 }
 
 /// Current conditions and active alerts at a location or point.
@@ -108,8 +132,14 @@ pub struct Current {
     /// The latest readings of nearby sensors.
     #[serde(default)]
     pub sensors: Vec<SensorObservation>,
-    /// Right now; `None` when no served hour is near the request time.
-    pub current: Option<CurrentConditions>,
+    /// (JSON `current`) Right now; `None` when no served hour is near the
+    /// request time.
+    #[serde(rename(deserialize = "current"), alias = "now")]
+    pub now: Option<CurrentConditions>,
+    /// The place summary, written by the server from served values only.
+    pub summary: Option<PlaceSummary>,
+    /// The mountain pass forecast (mountain passes only).
+    pub pass: Option<PassForecast>,
     /// When the response was built (RFC 3339).
     pub as_of: String,
     /// The served model run's init time (RFC 3339).
@@ -135,12 +165,20 @@ pub struct CurrentConditions {
     pub temperature: f64,
     /// Feels-like temperature.
     pub feels_like: Option<f64>,
-    /// The condition code.
-    pub condition: Condition,
-    /// The condition, for display.
-    pub condition_text: String,
-    /// The icon hint.
-    pub condition_icon: ConditionIcon,
+    /// (JSON `condition`) The condition code.
+    #[serde(rename(deserialize = "condition"), alias = "code")]
+    pub code: Condition,
+    /// (JSON `condition_text`) The condition, for display.
+    #[serde(rename(deserialize = "condition_text"), alias = "text")]
+    pub text: String,
+    /// (JSON `condition_icon`) The icon hint.
+    #[serde(rename(deserialize = "condition_icon"), alias = "icon")]
+    pub icon: ConditionIcon,
+    /// Whether precipitation was measured in the hour in progress (see
+    /// [`TimeSeriesPoint::measured`]).
+    pub measured: bool,
+    /// Cloud cover, percent (0-100), of the hour in progress.
+    pub cloud_cover: Option<f64>,
     /// Wind speed.
     pub wind_speed: f64,
     /// Wind gust.
@@ -163,12 +201,17 @@ pub struct CurrentConditions {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct CurrentStation {
-    /// The station's ID, as in [`SensorObservation::station_id`].
-    pub station_id: String,
-    /// The station's name, such as `"KPDX"`.
+    /// (JSON `station_id`) The station's ID in its network, as in
+    /// [`SensorObservation::station_id`].
+    #[serde(rename(deserialize = "station_id"), alias = "id")]
+    pub id: String,
+    /// The station's registry name, else its ID.
     pub name: String,
     /// Its observation time (RFC 3339).
     pub observation_time: String,
+    /// Whether the reading was calm (no wind, so no bearing: the served
+    /// direction is then the forecast's, not the station's).
+    pub calm: bool,
 }
 
 /// One sensor's latest reading, in the request's units.
@@ -181,8 +224,14 @@ pub struct SensorObservation {
     pub name: String,
     /// The observation network.
     pub source: String,
-    /// The reading's time (RFC 3339).
-    pub observation_time: String,
+    /// (JSON `observation_time`) The reading's time (RFC 3339).
+    #[serde(rename(deserialize = "observation_time"), alias = "observed_at")]
+    pub observed_at: String,
+    /// The distance from the location, km.
+    pub distance_km: f64,
+    /// The sensor's elevation minus the location's, in the length unit
+    /// (positive above).
+    pub elevation_diff: Option<f64>,
     /// Temperature.
     pub temperature: Option<f64>,
     /// Dewpoint.
@@ -236,13 +285,14 @@ pub struct Alerts {
     pub meta: ResponseMeta,
     /// The location.
     pub location: LocationRef,
-    /// The number of alerts.
-    pub alert_count: u32,
+    /// (JSON `alert_count`) The number of alerts.
+    #[serde(rename(deserialize = "alert_count"), alias = "count")]
+    pub count: u32,
     /// When the alerts were fetched (RFC 3339).
     pub as_of: String,
-    /// The alerts.
-    #[serde(default)]
-    pub alerts: Vec<ActiveAlert>,
+    /// (JSON `alerts`) The alerts.
+    #[serde(default, rename(deserialize = "alerts"), alias = "items")]
+    pub items: Vec<ActiveAlert>,
     /// The data sources.
     pub attribution: ResponseAttribution,
 }
@@ -260,20 +310,24 @@ pub struct LocationSummary {
     pub description: Option<String>,
     /// The location's forecast elevations, the primary first.
     #[serde(default)]
-    pub elevations: Vec<NamedElevation>,
+    pub elevations: Vec<ElevationSummary>,
 }
 
-/// One of a location's forecast elevations, in the request's length unit.
+/// One of a location's elevation points, in the request's length unit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
-pub struct NamedElevation {
-    /// The name, such as `"summit"`.
+pub struct ElevationSummary {
+    /// The elevation's ID: the name to pass to
+    /// [`ForecastRequest::elevations`](crate::ForecastRequest::elevations),
+    /// such as `"summit"`.
     pub name: String,
-    /// The elevation.
-    pub elevation: f64,
-    /// Whether this is the primary (the elevation forecasts are served at).
-    #[serde(default)]
-    pub default: bool,
+    /// What the place is called, for display (`"K-1 Lodge"`).
+    pub display_name: Option<String>,
+    /// (JSON `elevation`) The elevation.
+    #[serde(rename(deserialize = "elevation"), alias = "height")]
+    pub height: f64,
+    /// Whether this is the primary (`Some(true)` on the primary only).
+    pub default: Option<bool>,
 }
 
 /// A location near another, with its distance.
@@ -294,15 +348,16 @@ pub struct NearbyLocations {
     /// How the response was obtained.
     #[serde(skip)]
     pub meta: ResponseMeta,
-    /// The location searched around.
-    pub location: LocationSummary,
+    /// (JSON `location`) The location searched around.
+    #[serde(rename(deserialize = "location"), alias = "origin")]
+    pub origin: LocationSummary,
     /// The search radius, km.
     pub radius_km: f64,
     /// The number of neighbours.
     pub count: u32,
-    /// The neighbours, nearest first.
-    #[serde(default)]
-    pub locations: Vec<NearbyLocation>,
+    /// (JSON `locations`) The neighbours, nearest first.
+    #[serde(default, rename(deserialize = "locations"), alias = "items")]
+    pub items: Vec<NearbyLocation>,
 }
 
 /// The locations near a point.
@@ -320,9 +375,9 @@ pub struct NearbyPoint {
     pub radius_km: f64,
     /// The number of neighbours.
     pub count: u32,
-    /// The neighbours, nearest first.
-    #[serde(default)]
-    pub locations: Vec<NearbyLocation>,
+    /// (JSON `locations`) The neighbours, nearest first.
+    #[serde(default, rename(deserialize = "locations"), alias = "items")]
+    pub items: Vec<NearbyLocation>,
 }
 
 /// One page of a state's (or every state's) named locations.
@@ -336,9 +391,9 @@ pub struct LocationsPage {
     pub state: String,
     /// The number of locations on this page.
     pub count: u32,
-    /// The locations.
-    #[serde(default)]
-    pub locations: Vec<LocationSummary>,
+    /// (JSON `locations`) The locations.
+    #[serde(default, rename(deserialize = "locations"), alias = "items")]
+    pub items: Vec<LocationSummary>,
     /// The cursor of the next page; `None` on the last page.
     pub next_cursor: Option<String>,
 }
@@ -361,13 +416,18 @@ pub struct SearchResults {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct SearchHit {
-    /// The `"state/slug"` key, as the location methods take it.
+    /// The hit's unique key, such as `"or-mt-hood-meadows"` (a dash, not a
+    /// slash: for a location method, use `location.key()`).
     pub key: String,
     /// The location.
     #[serde(flatten)]
     pub location: LocationRef,
     /// The county.
     pub county: String,
+    /// With a metric [`SearchRequest::sort`](crate::SearchRequest::sort),
+    /// the place's value as [`Client::explore`](crate::Client::explore)
+    /// ranks it; `None` where it has none.
+    pub explore: Option<ExploreValue>,
 }
 
 with_meta!(

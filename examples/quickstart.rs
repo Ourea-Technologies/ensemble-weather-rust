@@ -19,13 +19,13 @@ async fn main() -> Result<(), ensemble_weather::Error> {
         .units
         .unit_for(&Variable::Temperature)
         .map_or("", |u| u.symbol());
-    for hour in forecast.forecast.timeseries.iter().take(24) {
+    for hour in forecast.series.timeseries.iter().take(24) {
         if let Some(range) = hour.ensemble.temperature.range80() {
             println!("{}  {range:.1} {unit}", hour.valid_time);
         }
     }
     for chance in &forecast.probabilities {
-        if let Some(p) = chance.probability {
+        if let Some(p) = chance.value {
             let unit = chance.threshold_unit.map_or("", |u| u.symbol());
             println!(
                 "Chance of >= {} {unit} of snow in {}-{} h: {:.0}% ({} members)",

@@ -30,11 +30,11 @@ pub(crate) fn number(v: f64) -> String {
     format!("{v}")
 }
 
+/// One parameter, its value already percent-encoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Param {
     name: &'static str,
-    value: String,
-    keep: &'static [u8],
+    encoded: String,
 }
 
 /// A canonical query: each parameter at most once (except the one declared
@@ -48,8 +48,7 @@ impl Query {
     pub(crate) fn set(&mut self, name: &'static str, value: impl Into<String>) {
         self.params.push(Param {
             name,
-            value: value.into(),
-            keep: b"",
+            encoded: escape(&value.into(), b""),
         });
     }
 
@@ -67,23 +66,29 @@ impl Query {
         }
     }
 
-    /// Sets a comma-joined list unless it is empty.
+    /// Sets a comma list unless it is empty: sorted and de-duplicated (the
+    /// server's canonical form), each item percent-encoded, and the commas
+    /// between items literal (BEHAVIOR 3.1 rule 5).
     pub(crate) fn list(&mut self, name: &'static str, values: &[String]) {
+        let mut values = values.to_vec();
+        values.sort();
+        values.dedup();
+        self.joined(name, &values);
+    }
+
+    /// Sets values the SDK printed itself (numbers of `near` and `bbox`),
+    /// joined with literal commas in the order given, unless there are none.
+    pub(crate) fn joined(&mut self, name: &'static str, values: &[String]) {
         if !values.is_empty() {
-            self.set(name, values.join(","));
+            let encoded: Vec<String> = values.iter().map(|v| escape(v, b"")).collect();
+            self.params.push(Param {
+                name,
+                encoded: encoded.join(","),
+            });
         }
     }
 
     /// Sets an integer unless it is absent or the route's default.
-    /// A comma-joined list, sorted and de-duplicated (the server's canonical
-    /// form), unless it is empty.
-    pub(crate) fn sorted_list(&mut self, name: &'static str, values: &[String]) {
-        let mut values = values.to_vec();
-        values.sort();
-        values.dedup();
-        self.list(name, &values);
-    }
-
     pub(crate) fn int(&mut self, name: &'static str, value: Option<u32>, default: Option<u32>) {
         if let Some(v) = value.filter(|v| Some(*v) != default) {
             self.set(name, v.to_string());
@@ -110,8 +115,7 @@ impl Query {
         if let Some(v) = value.filter(|v| !v.is_empty()) {
             self.params.push(Param {
                 name,
-                value: v.to_owned(),
-                keep: b":,",
+                encoded: escape(v, b":,"),
             });
         }
     }
@@ -122,7 +126,7 @@ impl Query {
         params.sort_by(|a, b| a.name.cmp(b.name));
         params
             .iter()
-            .map(|p| format!("{}={}", escape(p.name, b""), escape(&p.value, p.keep)))
+            .map(|p| format!("{}={}", escape(p.name, b""), p.encoded))
             .collect::<Vec<_>>()
             .join("&")
     }
@@ -156,11 +160,19 @@ mod tests {
         q.set("units", "imperial");
         q.int("max_hours", Some(24), Some(24));
         q.flag("nowcast", Some(false), true);
-        q.sorted_list(
+        q.list(
             "capability",
             &["b".to_owned(), "a".to_owned(), "a".to_owned()],
         );
-        q.sorted_list("network", &[]);
-        assert_eq!(q.encode(), "capability=a%2Cb&nowcast=false&units=imperial");
+        q.list("network", &[]);
+        assert_eq!(q.encode(), "capability=a,b&nowcast=false&units=imperial");
+    }
+
+    #[test]
+    fn list_items_are_encoded_and_their_commas_literal() {
+        let mut q = Query::default();
+        q.list("sources", &["b c".to_owned(), "a,b".to_owned()]);
+        q.joined("near", &[number(45.33), number(-121.66)]);
+        assert_eq!(q.encode(), "near=45.33,-121.66&sources=a%2Cb,b%20c");
     }
 }

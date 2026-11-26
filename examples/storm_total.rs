@@ -20,7 +20,7 @@ async fn main() -> Result<(), ensemble_weather::Error> {
 
     for total in &forecast.window_totals {
         let unit = total.unit.map_or("", |u| u.symbol());
-        let window = format!("{}-{} h", total.window_start_hours, total.window_end_hours);
+        let window = format!("{}-{} h", total.start_hours, total.end_hours);
         match &total.quantiles {
             Some(q) => {
                 let median = q.median().map_or("?".to_owned(), |m| format!("{m:.1}"));
