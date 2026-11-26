@@ -107,6 +107,18 @@ async fn every_example_runs_against_the_stub() {
             ],
         ),
         ("units", None, &["metric:", "°C", "imperial:", "°F"]),
+        (
+            "snow_report",
+            None,
+            &[
+                " 1. Brundage Mountain",
+                "11.431 in",
+                "210.69 mm since 2026-10-01, 41% of normal",
+                "alert: Winter Storm Warning (winter)",
+                "avalanche zone Mt Hood: Considerable",
+                "164 members from 5 models",
+            ],
+        ),
     ];
     let mut handles = Vec::new();
     for &(name, key, wants) in cases {
@@ -148,7 +160,7 @@ fn the_blocking_client_works_end_to_end() {
         .chance(Chance::at_least(Variable::Snowfall, Threshold::inches(6.0)))
         .send()
         .unwrap();
-    assert_eq!(f.probabilities[0].probability, Some(0.42));
+    assert_eq!(f.probabilities[0].value, Some(0.42));
     let again = client.forecast("or/mt-hood-meadows").send().unwrap();
     assert!(!again.meta.revalidated); // a different URL: no prob=
     let again = client.forecast("or/mt-hood-meadows").send().unwrap();
